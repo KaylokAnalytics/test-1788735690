@@ -14,8 +14,9 @@ la familia `1.d4`.
 
 - Esta es la famosa **"liberación capablanca"**: cambio `...dxc4`, caballo a
   `d5`, alfil contra alfil. La posición queda **igualada y sin debilidades**.
-- **Plan después de `10...Qxe7`:** `11.0-0 Nxc3 12.Rxc3 e5` (o `...b6`,
-  `...Bb7`, `...Rac8`) — juegas con el centro liberado. Si el blanco no
+- **Plan después de `10...Qxe7`:** `11.0-0` y juegas **`...b6`, `...Bb7`,
+  `...Rac8`** (lo que prefiere el motor, `+0.3` igualado), o el clásico
+  `...Nxc3 12.Rxc3 e5` — en ambos casos el centro liberado. Si el blanco no
   acepta el cambio en `d5`, igualas con `...e5` o preparas `...c5`.
 - **Qué NO memorizar:** cualquier transposición del blanco al mismo sistema
   (cambie el orden de `Nc3/Nf3/Bg5`) juegas **el tronco tal cual**.
@@ -39,9 +40,11 @@ la familia `1.d4`.
 - Tu setup: `...c5` inmediato, alfil activo a `d6` (atacando `h2`), y el
   plan `...0-0` + `...Re8` + ruptura `...e5` (con `...cxd4` primero si el
   blanco aprieta). Igualdad cómoda sin teoría.
-- **Cebo contra el Londres:** si el blanco juega `7.Bg3` y se descuida con
-  `8.h3?` o suelta el control de `e5`, `...cxd4`+`...e5` libera tu juego y
-  abre la diagonal a `h2` con tu alfil.
+- **Cebo contra el Londres (verificado con motor):** si el blanco se descuida
+  con `8.h3?` (o suelta el control de `e5`/`g3`), juega **`...Bxg3!` primero**:
+  `8...Bxg3! 9.fxg3` y su flanco de rey queda roto con `...cxd4` + `...e5`
+  listos detrás (eval `-2`: claramente mejor para ti). No dejes pasar ese
+  alfil sin castigo.
 - Si el blanco juega `Qb3` (su forma de provocar/evitar `...Qb6`): si tienes
   tu dama en `b6`, **cambia damas sin miedo** — el final es igualado y tu
   estructura queda intacta. Después, el plan base. No hay variante nueva.
@@ -62,8 +65,8 @@ la familia `1.d4`.
 
 ## Motivo táctico que debes ver siempre
 
-El **jaque descubierto / cambio en `d5`**: cuando tu caballo llega a `d5`
-(después de `...dxc4`), ataca al caballo/al rey rival y abre el camino a
+El **cambio central en `d5`**: cuando tu caballo llega a `d5` (tras
+`...dxc4`), ataca el caballo/blanco rival y libera la diagonal de tu dama a
 `e7`/`c7`. Todos tus rivales sub-2000 reaccionan mal a `...Nd5`: no saben si
 cambiar, retirar o avanzar. Tú decides tras ver su reacción, no antes.
 
