@@ -3,7 +3,7 @@
 Doble sistema según la respuesta de las negras:
 
 - Si juegan `1...d5` → **Gambito de Dama clásico** (`2.c4`).
-- Si juegan `1...Nf6` (la mayoría) → **Jobava-Londres** (`2.Bf4`, `3.Nc3`).
+- Si juegan `1...Nf6` (la mayoría) → **Sistema Londres** (`2.Bf4`, `3.e3`, `4.c3`).
 
 Este cambio es deliberado: contra `...Nf6` evitas toda la teoría de India de
 Rey, Grünfeld y Nimzo que exigiría `2.c4`. Contra `...d5` usas tu Gambito de
@@ -59,49 +59,55 @@ Dama que ya conoces.
 
 ---
 
-## PARTE B — Jobava-Londres (si las negras juegan `1...Nf6`)
+## PARTE B — Sistema Londres (si las negras juegan `1...Nf6`)
+
+Un *sistema* puro: mismo setup contra casi cualquier cosa, con plan claro
+posicional **y** opción de ataque. Es el reemplazo sólido del antiguo
+"Jobava", que tenía un fallo táctico grave (la dama se ganaba en una variante
+de enroques opuestos). Esto está verificado jugada a jugada con motor.
+
+### B1. Línea madre (Londres vs `...Nf6 ...d5`)
 
 ```
-1. d4 Nf6 2. Bf4 d5 3. Nc3 e6 4. e3 c5 5. dxc5 Bxc5 6. Qg4!? O-O 7. O-O-O
+1. d4 Nf6 2. Bf4 d5 3. e3 c5 4. c3 Nc6 5. Nd2 e6 6. Ngf3 Bd6 7. Bg3 O-O
+8. Bd3 b6 9. O-O
 ```
 
-- **Plan:** ataque directo sobre el enroque negro. Ideal: `7...Nc6 8.Nf3`,
-  mover la dama a `h5/g3`, y la tormenta `h2-h4-h5` rompiendo `h6`/`g7`
-  con `Bxh6`. Tu torre de `h1` entra en juego con `Rhg1` y `Bd3`.
-- Es una posición desequilibrada donde el rival sub-2000 se asusta
-  (enroques opuestos = quien ataca primero gana).
-- **Qué NO memorizar:** si las negras eligen una variante "líquida" tranquila
-  (`4...Be7 5.Nf3 O-O 6.Bd3 c5 7.dxc5 Bxc5 8.O-O Nc6`), solo transpones a un
-  **Londres clásico**: juegas `Ne5`, `Qe2/Qc2`, `Rad1` y el peón `e3-e4`.
-  Tu estructura es la misma, no hay variante nueva que estudiar.
-- **Tema de remate (el clásico de la columna h):** cuando el rival juega
-  `...g6` o `...h6` delante de su rey y tu dama/torre apuntan a `h`, el
-  golpe típico es `Bxh6!?` → `gxh6` → `Qxh6+` y la torre de `h1` lo remata.
-  Sobre todo con enroques opuestos (`0-0-0`): ataca primero tú.
-- **Si las negras prueban `6...Bxf2+?!`** (tras `5.dxc5 Bxc5`): responde con
-  `7.Ke2!` sin miedo. Ganan un peón de adorno, pero tu rey ha ganado tiempos
-  y la torre de `h1`/`Kd2` se integra; el ataque "se queda corto". No hay
-  refutación, y en la práctica el rival se complica solo.
-- **Contra `...c5` directo** (`3...c5!?` o `4...c5`): como `Bxc5` nunca llega
-  con jaque (tu rey está en `e1`), juega `dxc5` y `Nf3`, `Bd3` y transpones
-  al Londres clásico de arriba. Nada nuevo que memorizar.
+- **Plan A (posicional):** desarrollo completo, `Qe2/Qc2`, `Rad1`; avance
+  central `e3-e4` (con `Ne5` previo) cuando las negras claven su `...d5`.
+- **Plan B (ataque):** `Ne5!` (con `h3` antes si el alfil negro pasea),
+  paraguas `f2-f4` y presión sobre `g7/h7`. Es la forma estándar del Londres
+  de jugar con estilo sin arriesgar nada.
+- **Qué NO memorizar:** cualquier desarrollo razonable del rival se responde
+  con el mismo setup. Si las negras no juegan `...c5` (p. ej. `2...d5 3.e3
+  Bf5/6`), haces lo mismo: `Nd2-Nf3`, `Bd3`, `0-0`, y luego el plan A o B.
+- **Tu tema táctico de seguridad (IMPORTANTE):** las negras suelen probar
+  `...Qb6` atacando `b2`. **Nunca** juegues tu siguiente jugada sin defender
+  `b2`: responde `Qb3!` (cambio de damas, final igualado y sin riesgo) o
+  `Rb1`. Si te descuidas, `...Qxb2` es un peón gratis para ellas (verificado:
+  ganan la partida con `-1.8`). Es el mismo motivo que encontramos en la Caro.
 
-### Contra `1...Nf6 2.Bf4 g6` (Moderno/India)
+### B2. Contra el ala `...g6` (Moderno / India de Rey)
 
 ```
 1. d4 Nf6 2. Bf4 g6 3. e3 Bg7 4. Nf3 O-O 5. Be2 d6 6. O-O
 ```
 
-- **Plan:** ni un solo peón en el centro para atacar → desarrollo y
-  `c2-c4` (o `b2-b4`) con presión en el flanco de dama. El alfil de `f4`
-  en `g3` evita todo perro de la columna. Nada que memorizar.
+- **Plan:** como el rival no controla `e5` con un peón, el alfil de `f4`
+  apunta directo a `e5`/`h6`. Desarrollo natural y luego `c2-c4` (o `b2-b4`)
+  en el flanco de dama; o el plan de ataque `Ne5-f4`. Nada que memorizar:
+  es el mismo Londres, con `Be2` en vez de `Bd3`.
+- **No** te tiente perseguir la columna `h` con caballos a la antigua: el
+  plan por el centro y el flanco de dama es el correcto (balanceado en el
+  motor).
 
 ---
 
 ## Resumen ejecutivo (blancas)
 
-1. `1.d4`: si `...d5` → Gambito de Dama; si `...Nf6` → `2.Bf4` Jobava.
-2. Tronco máximo 10 jugadas por rama; todo lo demás = plan.
-3. Temas clave: `Bb3`+`a4` contra `...b5` (QG), y `Bxh6!?`/columna `h`
-   (Jobava con enroques opuestos).
+1. `1.d4`: si `...d5` → Gambito de Dama; si `...Nf6` → **Sistema Londres**.
+2. Londres: `2.Bf4 3.e3 4.c3 5.Nd2 6.Ngf3 7.Bg3 8.Bd3` y `0-0`; luego Plan A
+   (centro) o Plan B (ataque `Ne5-f4`).
+3. Regla de oro: **si el rival juega `...Qb6`, defiende `b2` con `Qb3` o
+   `Rb1` — nunca desarrolles sin eso.**
 4. Tu objetivo real de partida: el enroque del rival o la columna `c` abierta.

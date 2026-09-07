@@ -28,7 +28,8 @@ conversión": cómo sellar la victoria sin regalar la partida.
 - **Escalera (damas/torres):** `Qd6+ Qa6+` estilo "barrido"; siempre cubre
   las casillas de escape del rey rival.
 - **Columna h (tu repertorio):** `Qh5 + Rh1` contra `Kg8`; tu rival sub-2000
-  no ve el mate en `h7` o la red `Bxh6 + Nf7`. Materia del Jobava y la Caro.
+  no ve el mate en `h7` ni la red `Bxh6 + Nf7`. Es el clásico de la columna
+  `h`, muy común en las posiciones de este repertorio.
 - **Fondo de tablero (back-rank):** la clásica. **Antes de cada jugada en
   medio juego, revisa tu propia primera fila.** La mitad de los sub-2000
   pierden por esto.

@@ -6,7 +6,7 @@
 [Black "Rep_Negras"]
 [Result "*"]
 
-1. e4 c6 2. d4 d5 3. e5 Bf5 4. Nf3 e6 5. Be2 c5 6. Be3 Nc6 7. c3 Qb6 8. Qd2 Nge7 9. O-O O-O-O *
+1. e4 c6 2. d4 d5 3. e5 Bf5 4. Nf3 e6 5. Be2 c5 6. Be3 Nd7 7. c3 cxd4 8. cxd4 Bb4+ 9. Nbd2 Nge7 10. O-O Nc6 11. a3 Be7 12. Ne1 O-O *
 
 [Event "Repertorio Negras - 2"]
 [Site "?"]

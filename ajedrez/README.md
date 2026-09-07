@@ -27,7 +27,7 @@ Un repertorio "de sistema" no necesita 500 variantes. Necesita:
 | Color | Apertura | Archivo |
 |---|---|---|
 | Blancas | **Gambito de Dama** (si el rival juega `...d5`) | `blancas.md` |
-| Blancas | **Jobava-Londres** (si el rival juega `...Nf6`) | `blancas.md` |
+| Blancas | **Sistema Londres** (si el rival juega `...Nf6`) | `blancas.md` |
 | Negras vs `1.e4` | **Caro-Kann Avanzada** (`...c6 ...Bf5`) | `negras-e4.md` |
 | Negras vs `1.d4` | **Gambito de Dama Rehusado** (`...e6 ...Nf6`) | `negras-d4.md` |
 | Cualquier color | **Remates y conversión** | `remates.md` |
@@ -50,7 +50,7 @@ Un repertorio "de sistema" no necesita 500 variantes. Necesita:
 
 ## Archivos
 
-- `blancas.md` — GQ clásico + Jobava-Londres, con planes y trampas.
+- `blancas.md` — GQ clásico + Sistema Londres, con planes y trampas.
 - `negras-e4.md` — Caro-Kann Avanzada.
 - `negras-d4.md` — QGD contra todo el mundo de `1.d4` y laterales.
 - `remates.md` — convertir la ventaja (donde más puntos se pierden).
