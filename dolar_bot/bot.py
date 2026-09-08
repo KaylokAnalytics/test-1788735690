@@ -5,7 +5,8 @@ import os
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+import pytz  # 👈 NUEVO: Para zona horaria de Cuba
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
 # ========== CONFIGURACIÓN ==========
@@ -18,6 +19,13 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger(__name__)
+
+# ========== ZONA HORARIA CUBA ==========
+HAVANA_TZ = pytz.timezone('America/Havana')
+
+def get_cuba_time():
+    """Devuelve la fecha y hora actual en Cuba."""
+    return datetime.now(HAVANA_TZ)
 
 # ========== EMOJIS TEMÁTICOS ==========
 E = {
@@ -38,6 +46,8 @@ E = {
     "grafico": "📈",
     "noticia": "📰",
     "recomendacion": "📌",
+    "atras": "⬅️",
+    "menu": "🏠",
 }
 
 # ========== SERVIDOR WEB ==========
@@ -71,6 +81,15 @@ def save_premium_users(data):
     with open(PREMIUM_USERS_FILE, "w") as f:
         json.dump(data, f, indent=2)
 
+# ========== TECLADO PRINCIPAL (en el teclado, no en el chat) ==========
+def get_main_keyboard():
+    """Teclado que aparece en la parte inferior del chat."""
+    keyboard = [
+        [KeyboardButton(f"{E['dinero']} Dólar"), KeyboardButton(f"{E['analisis']} Análisis")],
+        [KeyboardButton(f"{E['premium']} Premium"), KeyboardButton(f"{E['ayuda']} Ayuda")],
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+
 # ========== DÓLAR ==========
 dolar_cache = {"precio": None, "timestamp": None}
 
@@ -90,7 +109,8 @@ def get_dolar():
         return dolar_cache["precio"]
 
     success, blue, oficial = _get_dolar_eltoque()
-    fecha = datetime.now().strftime('%d/%m/%Y %H:%M')
+    # 👈 FECHA EN HORARIO DE CUBA
+    fecha = get_cuba_time().strftime('%d/%m/%Y %I:%M %p')
     
     if success and blue is not None and oficial is not None:
         mensaje = (
@@ -122,9 +142,11 @@ def get_dolar():
     return mensaje
 
 def get_analisis_economico():
+    fecha = get_cuba_time().strftime('%d/%m/%Y %I:%M %p')
     return (
         f"{E['analisis']} *ANÁLISIS ECONÓMICO*\n"
         f"═══════════════════\n\n"
+        f"{E['calendario']} *Fecha:* {fecha}\n\n"
         f"{E['tendencia']} *Tendencias:*\n"
         f"• Dólar volátil en mercado informal\n"
         f"• Presión inflacionaria\n"
@@ -141,40 +163,51 @@ def get_analisis_economico():
 
 # ========== COMANDOS ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
+    """Comando /start - Muestra el menú principal."""
+    user = update.effective_user
+    # 👈 NOMBRE DE USUARIO
+    nombre = user.first_name or user.username or "Usuario"
+    user_id = str(user.id)
+    
     premium_data = load_premium_users()
     is_premium = user_id in premium_data["users"]
 
-    keyboard = [
-        [InlineKeyboardButton(f"{E['dinero']} Dólar", callback_data="dolar"),
-         InlineKeyboardButton(f"{E['analisis']} Análisis", callback_data="analisis")],
-        [InlineKeyboardButton(f"{E['premium']} Premium", callback_data="premium"),
-         InlineKeyboardButton(f"{E['ayuda']} Ayuda", callback_data="ayuda")],
-    ]
-
     mensaje = (
-        f"{E['usuario']} *BIENVENIDO*\n"
+        f"{E['usuario']} *BIENVENIDO, {nombre.upper()}!*\n"
         f"═══════════════════\n\n"
         f"{E['analisis']} *DolarCubaAnalisisBot*\n"
         f"Tu asistente económico 🇨🇺\n\n"
         f"{E['usuario']} *Estado:* {'⭐ Premium' if is_premium else '🟢 Gratuito'}\n\n"
-        f"Elige una opción 👇"
+        f"Usa los botones del teclado 👇"
     )
 
     await update.message.reply_text(
         mensaje,
-        reply_markup=InlineKeyboardMarkup(keyboard),
+        reply_markup=get_main_keyboard(),
         parse_mode="Markdown",
     )
 
-async def dolar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(get_dolar(), parse_mode="Markdown")
+async def handle_dolar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Maneja el botón Dólar."""
+    await update.message.reply_text(
+        get_dolar(),
+        reply_markup=get_main_keyboard(),
+        parse_mode="Markdown",
+    )
 
-async def analisis(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(get_analisis_economico(), parse_mode="Markdown")
+async def handle_analisis(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Maneja el botón Análisis."""
+    await update.message.reply_text(
+        get_analisis_economico(),
+        reply_markup=get_main_keyboard(),
+        parse_mode="Markdown",
+    )
 
-async def premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = str(update.effective_user.id)
+async def handle_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Maneja el botón Premium."""
+    user = update.effective_user
+    nombre = user.first_name or user.username or "Usuario"
+    user_id = str(user.id)
     premium_data = load_premium_users()
     is_premium = user_id in premium_data["users"]
     is_waitlist = user_id in premium_data["waitlist"]
@@ -183,26 +216,31 @@ async def premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mensaje = (
             f"{E['premium']} *USUARIO PREMIUM*\n"
             f"═══════════════════\n\n"
-            f"¡Gracias por tu apoyo! 🎉\n\n"
+            f"¡Gracias por tu apoyo, {nombre}! 🎉\n\n"
             f"{E['check']} Beneficios activos:\n"
             f"• Alertas en tiempo real\n"
             f"• Análisis detallado\n"
             f"• Soporte prioritario"
         )
-        await update.message.reply_text(mensaje, parse_mode="Markdown")
+        await update.message.reply_text(
+            mensaje,
+            reply_markup=get_main_keyboard(),
+            parse_mode="Markdown",
+        )
     elif is_waitlist:
         pos = premium_data["waitlist"].index(user_id) + 1
         mensaje = (
             f"{E['info']} *LISTA DE ESPERA*\n"
             f"═══════════════════\n\n"
-            f"Posición: *{pos}*\n\n"
+            f"{nombre}, estás en la posición: *{pos}*\n\n"
             f"{E['alerta']} *Te avisaremos cuando haya cupo*"
         )
-        await update.message.reply_text(mensaje, parse_mode="Markdown")
+        await update.message.reply_text(
+            mensaje,
+            reply_markup=get_main_keyboard(),
+            parse_mode="Markdown",
+        )
     else:
-        keyboard = [
-            [InlineKeyboardButton(f"{E['premium']} Unirse a lista", callback_data="join_waitlist")],
-        ]
         mensaje = (
             f"{E['premium']} *PLAN PREMIUM*\n"
             f"═══════════════════\n\n"
@@ -212,122 +250,107 @@ async def premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• Análisis con IA\n"
             f"• Reportes exclusivos\n\n"
             f"Cupos: *{500 - len(premium_data['users'])} / 500*\n\n"
-            f"¿Te unes a la lista de espera?"
+            f"¿Te unes a la lista de espera?\n"
+            f"Usa el comando /unirse"
         )
         await update.message.reply_text(
             mensaje,
-            reply_markup=InlineKeyboardMarkup(keyboard),
+            reply_markup=get_main_keyboard(),
             parse_mode="Markdown",
         )
 
-async def ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Maneja el botón Ayuda."""
+    user = update.effective_user
+    nombre = user.first_name or user.username or "Usuario"
+    
     mensaje = (
-        f"{E['ayuda']} *AYUDA*\n"
+        f"{E['ayuda']} *AYUDA PARA {nombre.upper()}*\n"
         f"═══════════════════\n\n"
         f"*Comandos disponibles:*\n"
         f"/start - Menú principal\n"
         f"/dolar - Precio del dólar\n"
         f"/analisis - Análisis económico\n"
         f"/premium - Info de suscripción\n"
+        f"/unirse - Unirse a lista premium\n"
         f"/ayuda - Este mensaje\n\n"
         f"───────────────────\n"
         f"_{'Creado para la comunidad cubana 🇨🇺'}_"
     )
-    await update.message.reply_text(mensaje, parse_mode="Markdown")
+    await update.message.reply_text(
+        mensaje,
+        reply_markup=get_main_keyboard(),
+        parse_mode="Markdown",
+    )
 
-# ========== CALLBACKS ==========
-async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = str(update.effective_user.id)
+async def dolar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /dolar"""
+    await update.message.reply_text(
+        get_dolar(),
+        reply_markup=get_main_keyboard(),
+        parse_mode="Markdown",
+    )
+
+async def analisis_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /analisis"""
+    await update.message.reply_text(
+        get_analisis_economico(),
+        reply_markup=get_main_keyboard(),
+        parse_mode="Markdown",
+    )
+
+async def premium_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /premium"""
+    await handle_premium(update, context)
+
+async def ayuda_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /ayuda"""
+    await handle_ayuda(update, context)
+
+async def unirse_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /unirse - Unirse a la lista de espera premium."""
+    user = update.effective_user
+    nombre = user.first_name or user.username or "Usuario"
+    user_id = str(user.id)
     premium_data = load_premium_users()
 
-    if query.data == "dolar":
-        await query.edit_message_text(get_dolar(), parse_mode="Markdown")
-    
-    elif query.data == "analisis":
-        await query.edit_message_text(get_analisis_economico(), parse_mode="Markdown")
-    
-    elif query.data == "premium":
-        is_premium = user_id in premium_data["users"]
-        is_waitlist = user_id in premium_data["waitlist"]
-        if is_premium:
-            mensaje = (
-                f"{E['premium']} *PREMIUM*\n"
-                f"═══════════════════\n\n"
-                f"¡Ya eres usuario Premium! 🎉"
-            )
-            await query.edit_message_text(mensaje, parse_mode="Markdown")
-        elif is_waitlist:
-            pos = premium_data["waitlist"].index(user_id) + 1
-            mensaje = (
-                f"{E['info']} *LISTA DE ESPERA*\n"
-                f"═══════════════════\n\n"
-                f"Posición: *{pos}*"
-            )
-            await query.edit_message_text(mensaje, parse_mode="Markdown")
-        else:
-            keyboard = [
-                [InlineKeyboardButton(f"{E['premium']} Unirse", callback_data="join_waitlist")],
-                [InlineKeyboardButton(f"{E['volver']} Volver", callback_data="back_start")],
-            ]
-            mensaje = (
-                f"{E['premium']} *PLAN PREMIUM*\n"
-                f"═══════════════════\n\n"
-                f"Cupos: *{500 - len(premium_data['users'])} / 500*\n\n"
-                f"¿Te unes a la lista de espera?"
-            )
-            await query.edit_message_text(
-                mensaje,
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode="Markdown",
-            )
-    
-    elif query.data == "join_waitlist":
-        if user_id not in premium_data["waitlist"] and user_id not in premium_data["users"]:
-            premium_data["waitlist"].append(user_id)
-            save_premium_users(premium_data)
-            mensaje = (
-                f"{E['check']} *¡UNIDO CON ÉXITO!*\n"
-                f"═══════════════════\n\n"
-                f"Posición: *{len(premium_data['waitlist'])}*\n\n"
-                f"{E['alerta']} *Te avisaremos cuando haya cupo*"
-            )
-            await query.edit_message_text(mensaje, parse_mode="Markdown")
-        else:
-            mensaje = f"{E['info']} *Ya estás en la lista*"
-            await query.edit_message_text(mensaje, parse_mode="Markdown")
-    
-    elif query.data == "ayuda":
-        mensaje = (
-            f"{E['ayuda']} *AYUDA*\n"
-            f"═══════════════════\n\n"
-            f"*Comandos:*\n"
-            f"/start - Menú\n"
-            f"/dolar - Precio\n"
-            f"/analisis - Análisis\n"
-            f"/premium - Suscripción\n\n"
-            f"_{'Creado para la comunidad cubana 🇨🇺'}_"
-        )
-        await query.edit_message_text(mensaje, parse_mode="Markdown")
-    
-    elif query.data == "back_start":
-        keyboard = [
-            [InlineKeyboardButton(f"{E['dinero']} Dólar", callback_data="dolar"),
-             InlineKeyboardButton(f"{E['analisis']} Análisis", callback_data="analisis")],
-            [InlineKeyboardButton(f"{E['premium']} Premium", callback_data="premium"),
-             InlineKeyboardButton(f"{E['ayuda']} Ayuda", callback_data="ayuda")],
-        ]
-        mensaje = (
-            f"{E['usuario']} *BIENVENIDO*\n"
-            f"═══════════════════\n\n"
-            f"Elige una opción 👇"
-        )
-        await query.edit_message_text(
+    if user_id in premium_data["users"]:
+        mensaje = f"{E['premium']} ¡Ya eres usuario Premium, {nombre}! ⭐"
+        await update.message.reply_text(
             mensaje,
-            reply_markup=InlineKeyboardMarkup(keyboard),
+            reply_markup=get_main_keyboard(),
             parse_mode="Markdown",
         )
+        return
+
+    if user_id in premium_data["waitlist"]:
+        pos = premium_data["waitlist"].index(user_id) + 1
+        mensaje = (
+            f"{E['info']} *YA ESTÁS EN LA LISTA*\n"
+            f"═══════════════════\n\n"
+            f"{nombre}, posición: *{pos}*"
+        )
+        await update.message.reply_text(
+            mensaje,
+            reply_markup=get_main_keyboard(),
+            parse_mode="Markdown",
+        )
+        return
+
+    premium_data["waitlist"].append(user_id)
+    save_premium_users(premium_data)
+    
+    mensaje = (
+        f"{E['check']} *¡UNIDO CON ÉXITO, {nombre.upper()}!*\n"
+        f"═══════════════════\n\n"
+        f"Posición: *{len(premium_data['waitlist'])}*\n\n"
+        f"{E['alerta']} *Te avisaremos cuando haya cupo*"
+    )
+    await update.message.reply_text(
+        mensaje,
+        reply_markup=get_main_keyboard(),
+        parse_mode="Markdown",
+    )
 
 # ========== MAIN ==========
 def main():
@@ -335,12 +358,21 @@ def main():
     
     app = Application.builder().token(TOKEN).build()
 
+    # Comandos
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("dolar", dolar))
-    app.add_handler(CommandHandler("analisis", analisis))
-    app.add_handler(CommandHandler("premium", premium))
-    app.add_handler(CommandHandler("ayuda", ayuda))
-    app.add_handler(CallbackQueryHandler(button_callback))
+    app.add_handler(CommandHandler("dolar", dolar_command))
+    app.add_handler(CommandHandler("analisis", analisis_command))
+    app.add_handler(CommandHandler("premium", premium_command))
+    app.add_handler(CommandHandler("ayuda", ayuda_command))
+    app.add_handler(CommandHandler("unirse", unirse_command))
+
+    # Manejadores de texto para botones del teclado
+    # (Los botones del teclado envían texto, no callback_data)
+    from telegram.ext import MessageHandler, filters
+    app.add_handler(MessageHandler(filters.Regex(f"^{E['dinero']} Dólar$"), handle_dolar))
+    app.add_handler(MessageHandler(filters.Regex(f"^{E['analisis']} Análisis$"), handle_analisis))
+    app.add_handler(MessageHandler(filters.Regex(f"^{E['premium']} Premium$"), handle_premium))
+    app.add_handler(MessageHandler(filters.Regex(f"^{E['ayuda']} Ayuda$"), handle_ayuda))
 
     logger.info("🤖 Bot DolarCubaAnalisisBot iniciado correctamente")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
