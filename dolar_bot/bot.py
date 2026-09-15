@@ -27,9 +27,9 @@ if not TOKEN:
 ELTOQUE_API_KEY = os.environ.get("ELTOQUE_API_KEY")
 ELTOQUE_URL = "https://api.eltoque.com/v1/dolar"
 
-# ScraperAPI (para resolver Cloudflare)
-SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY")
-SCRAPERAPI_URL = "http://api.scraperapi.com"
+# ScrapingAnt (para resolver Cloudflare)
+SCRAPINGANT_KEY = os.environ.get("SCRAPINGANT_KEY")
+SCRAPINGANT_URL = "https://api.scrapingant.com/v2/general"
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -115,7 +115,7 @@ def get_main_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
 # ========== SISTEMA DE CACHÉ ==========
-# ⚠️ 60 minutos para no agotar el plan gratuito de ScraperAPI (1,000 peticiones/mes)
+# ⚠️ 60 minutos para no agotar el plan gratuito de ScrapingAnt (10,000 peticiones/mes)
 CACHE_DURATION = 60  # minutos
 
 dolar_cache = {
@@ -133,9 +133,9 @@ if CLOUDSCRAPER_AVAILABLE:
 else:
     scraper = None
 
-# ========== PETICIÓN A ELTOQUE VÍA SCRAPERAPI ==========
+# ========== PETICIÓN A ELTOQUE VÍA SCRAPINGANT ==========
 def _get_dolar_eltoque():
-    """Obtiene todas las divisas desde la API de elTOQUE usando ScraperAPI."""
+    """Obtiene todas las divisas desde la API de elTOQUE usando ScrapingAnt."""
     if not ELTOQUE_API_KEY:
         logger.warning("⚠️ ELTOQUE_API_KEY no configurada")
         return False, None
@@ -146,23 +146,23 @@ def _get_dolar_eltoque():
             "Accept": "application/json"
         }
         
-        if SCRAPERAPI_KEY:
-            # 🚀 Usar ScraperAPI para evitar el bloqueo de Cloudflare
+        if SCRAPINGANT_KEY:
+            # 🚀 Usar ScrapingAnt para evitar el bloqueo de Cloudflare
             params = {
-                "api_key": SCRAPERAPI_KEY,
+                "x-api-key": SCRAPINGANT_KEY,
                 "url": ELTOQUE_URL,
-                "render": "false",
+                "return_page_source": "false",
             }
-            logger.info("🌐 Petición a elTOQUE vía ScraperAPI...")
+            logger.info("🌐 Petición a elTOQUE vía ScrapingAnt...")
             response = requests.get(
-                SCRAPERAPI_URL,
+                SCRAPINGANT_URL,
                 params=params,
                 headers=headers,
                 timeout=60
             )
         else:
             # Fallback: petición directa (probablemente bloqueada por Cloudflare)
-            logger.info("🌐 Petición directa a elTOQUE (sin ScraperAPI)...")
+            logger.info("🌐 Petición directa a elTOQUE (sin ScrapingAnt)...")
             if CLOUDSCRAPER_AVAILABLE and scraper:
                 response = scraper.get(ELTOQUE_URL, headers=headers, timeout=30)
             else:
@@ -626,10 +626,10 @@ def main():
     else:
         logger.info("✅ ELTOQUE_API_KEY configurada")
     
-    if not SCRAPERAPI_KEY:
-        logger.warning("⚠️ SCRAPERAPI_KEY no configurada - peticiones directas (pueden fallar)")
+    if not SCRAPINGANT_KEY:
+        logger.warning("⚠️ SCRAPINGANT_KEY no configurada - peticiones directas (pueden fallar)")
     else:
-        logger.info("✅ SCRAPERAPI_KEY configurada")
+        logger.info("✅ SCRAPINGANT_KEY configurada")
     
     app = Application.builder().token(TOKEN).build()
 
