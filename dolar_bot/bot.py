@@ -9,14 +9,14 @@ import pytz
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
-# ========== CLOUDSCRAPER (para Cloudflare) ==========
+# ========== CLOUDSCRAPER (opcional, fallback) ==========
 try:
     import cloudscraper
     from cloudscraper.exceptions import CloudflareChallengeError
     CLOUDSCRAPER_AVAILABLE = True
 except ImportError:
     CLOUDSCRAPER_AVAILABLE = False
-    logging.warning("⚠️ cloudscraper no disponible, usando requests")
+    logging.warning("⚠️ cloudscraper no disponible")
 
 # ========== CONFIGURACIÓN ==========
 TOKEN = os.environ.get("BOT_TOKEN")
@@ -26,6 +26,10 @@ if not TOKEN:
 # API elTOQUE
 ELTOQUE_API_KEY = os.environ.get("ELTOQUE_API_KEY")
 ELTOQUE_URL = "https://api.eltoque.com/v1/dolar"
+
+# ScraperAPI (para resolver Cloudflare)
+SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY")
+SCRAPERAPI_URL = "http://api.scraperapi.com"
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -111,7 +115,9 @@ def get_main_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
 # ========== SISTEMA DE CACHÉ ==========
-CACHE_DURATION = 5  # minutos
+# ⚠️ 60 minutos para no agotar el plan gratuito de ScraperAPI (1,000 peticiones/mes)
+CACHE_DURATION = 60  # minutos
+
 dolar_cache = {
     "datos": None,
     "timestamp": None,
@@ -119,18 +125,17 @@ dolar_cache = {
     "ultima_peticion": None
 }
 
-# ========== CLIENTE HTTP ==========
+# ========== CLIENTE HTTP (fallback) ==========
 if CLOUDSCRAPER_AVAILABLE:
     scraper = cloudscraper.create_scraper(
         browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
     )
-    logger.info("✅ cloudscraper inicializado")
 else:
     scraper = None
-    logger.info("ℹ️ Usando requests (sin cloudscraper)")
 
+# ========== PETICIÓN A ELTOQUE VÍA SCRAPERAPI ==========
 def _get_dolar_eltoque():
-    """Obtiene todas las divisas desde la API de elTOQUE."""
+    """Obtiene todas las divisas desde la API de elTOQUE usando ScraperAPI."""
     if not ELTOQUE_API_KEY:
         logger.warning("⚠️ ELTOQUE_API_KEY no configurada")
         return False, None
@@ -141,13 +146,27 @@ def _get_dolar_eltoque():
             "Accept": "application/json"
         }
         
-        logger.info("🌐 Realizando petición a elTOQUE...")
-        
-        # Usar cloudscraper si está disponible, sino requests
-        if CLOUDSCRAPER_AVAILABLE and scraper:
-            response = scraper.get(ELTOQUE_URL, headers=headers, timeout=30)
+        if SCRAPERAPI_KEY:
+            # 🚀 Usar ScraperAPI para evitar el bloqueo de Cloudflare
+            params = {
+                "api_key": SCRAPERAPI_KEY,
+                "url": ELTOQUE_URL,
+                "render": "false",
+            }
+            logger.info("🌐 Petición a elTOQUE vía ScraperAPI...")
+            response = requests.get(
+                SCRAPERAPI_URL,
+                params=params,
+                headers=headers,
+                timeout=60
+            )
         else:
-            response = requests.get(ELTOQUE_URL, headers=headers, timeout=30)
+            # Fallback: petición directa (probablemente bloqueada por Cloudflare)
+            logger.info("🌐 Petición directa a elTOQUE (sin ScraperAPI)...")
+            if CLOUDSCRAPER_AVAILABLE and scraper:
+                response = scraper.get(ELTOQUE_URL, headers=headers, timeout=30)
+            else:
+                response = requests.get(ELTOQUE_URL, headers=headers, timeout=30)
         
         logger.info(f"📡 Respuesta elTOQUE - Status: {response.status_code}")
         
@@ -163,8 +182,8 @@ def _get_dolar_eltoque():
         elif response.status_code == 429:
             logger.warning("⚠️ Rate limit alcanzado en elTOQUE")
             return False, None
-        elif response.status_code in [401, 403]:
-            logger.error(f"❌ Error de autenticación elTOQUE: {response.status_code}")
+        elif response.status_code in [401, 402]:
+            logger.error(f"❌ Error de autenticación/pago: {response.status_code}")
             return False, None
         else:
             logger.error(f"❌ elTOQUE error {response.status_code}: {response.text[:300]}")
@@ -216,7 +235,6 @@ def formatear_divisas(data):
         
         # Manejar diferentes estructuras de respuesta
         if isinstance(data, dict):
-            # Buscar datos en diferentes niveles
             datos = data.get('data', data)
             
             if datos.get('blue'):
@@ -607,6 +625,11 @@ def main():
         logger.warning("⚠️ ELTOQUE_API_KEY no configurada - usando datos estimados")
     else:
         logger.info("✅ ELTOQUE_API_KEY configurada")
+    
+    if not SCRAPERAPI_KEY:
+        logger.warning("⚠️ SCRAPERAPI_KEY no configurada - peticiones directas (pueden fallar)")
+    else:
+        logger.info("✅ SCRAPERAPI_KEY configurada")
     
     app = Application.builder().token(TOKEN).build()
 
