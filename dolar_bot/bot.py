@@ -9,10 +9,23 @@ import pytz
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
+# ========== CLOUDSCRAPER (para Cloudflare) ==========
+try:
+    import cloudscraper
+    from cloudscraper.exceptions import CloudflareChallengeError
+    CLOUDSCRAPER_AVAILABLE = True
+except ImportError:
+    CLOUDSCRAPER_AVAILABLE = False
+    logging.warning("⚠️ cloudscraper no disponible, usando requests")
+
 # ========== CONFIGURACIÓN ==========
 TOKEN = os.environ.get("BOT_TOKEN")
 if not TOKEN:
     raise ValueError("❌ BOT_TOKEN no configurado")
+
+# API elTOQUE
+ELTOQUE_API_KEY = os.environ.get("ELTOQUE_API_KEY")
+ELTOQUE_URL = "https://api.eltoque.com/v1/dolar"
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -49,16 +62,14 @@ E = {
     "grafico": "📈",
     "noticia": "📰",
     "recomendacion": "📌",
-    "atras": "⬅️",
     "menu": "🏠",
     "fuente": "📡",
     "divisas": "💱",
     "hora": "🕐",
     "compartir": "📤",
-    "calificar": "⭐",
 }
 
-# ========== SERVIDOR WEB ==========
+# ========== SERVIDOR WEB PARA HEALTH CHECK ==========
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -99,8 +110,8 @@ def get_main_keyboard():
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
-# ========== SISTEMA DE CACHÉ MEJORADO ==========
-CACHE_DURATION = 5
+# ========== SISTEMA DE CACHÉ ==========
+CACHE_DURATION = 5  # minutos
 dolar_cache = {
     "datos": None,
     "timestamp": None,
@@ -108,34 +119,81 @@ dolar_cache = {
     "ultima_peticion": None
 }
 
+# ========== CLIENTE HTTP ==========
+if CLOUDSCRAPER_AVAILABLE:
+    scraper = cloudscraper.create_scraper(
+        browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
+    )
+    logger.info("✅ cloudscraper inicializado")
+else:
+    scraper = None
+    logger.info("ℹ️ Usando requests (sin cloudscraper)")
+
 def _get_dolar_eltoque():
+    """Obtiene todas las divisas desde la API de elTOQUE."""
+    if not ELTOQUE_API_KEY:
+        logger.warning("⚠️ ELTOQUE_API_KEY no configurada")
+        return False, None
+    
     try:
-        url = "https://api.eltoque.com/v1/dolar"
-        response = requests.get(url, timeout=30)
-        data = response.json()
+        headers = {
+            "Authorization": f"Bearer {ELTOQUE_API_KEY}",
+            "Accept": "application/json"
+        }
         
-        dolar_cache["peticiones_hoy"] += 1
-        dolar_cache["ultima_peticion"] = get_cuba_time()
+        logger.info("🌐 Realizando petición a elTOQUE...")
         
-        logger.info(f"📡 Petición a elTOQUE exitosa (Día: {dolar_cache['peticiones_hoy']})")
-        return True, data
+        # Usar cloudscraper si está disponible, sino requests
+        if CLOUDSCRAPER_AVAILABLE and scraper:
+            response = scraper.get(ELTOQUE_URL, headers=headers, timeout=30)
+        else:
+            response = requests.get(ELTOQUE_URL, headers=headers, timeout=30)
+        
+        logger.info(f"📡 Respuesta elTOQUE - Status: {response.status_code}")
+        
+        if response.status_code == 200:
+            data = response.json()
+            dolar_cache["peticiones_hoy"] += 1
+            dolar_cache["ultima_peticion"] = get_cuba_time()
+            logger.info(f"✅ elTOQUE OK (petición #{dolar_cache['peticiones_hoy']})")
+            return True, data
+        elif response.status_code == 403:
+            logger.error(f"❌ elTOQUE bloqueado (403). Respuesta: {response.text[:300]}")
+            return False, None
+        elif response.status_code == 429:
+            logger.warning("⚠️ Rate limit alcanzado en elTOQUE")
+            return False, None
+        elif response.status_code in [401, 403]:
+            logger.error(f"❌ Error de autenticación elTOQUE: {response.status_code}")
+            return False, None
+        else:
+            logger.error(f"❌ elTOQUE error {response.status_code}: {response.text[:300]}")
+            return False, None
+            
+    except CloudflareChallengeError as e:
+        logger.error(f"❌ Cloudflare bloqueó la petición: {e}")
+        return False, None
     except Exception as e:
         logger.warning(f"elTOQUE API error: {e}")
         return False, None
 
 def get_divisas():
+    """Obtiene todas las divisas con caché y límite de peticiones."""
     global dolar_cache
     
+    # Verificar caché
     if dolar_cache["timestamp"] and (get_cuba_time() - dolar_cache["timestamp"]) < timedelta(minutes=CACHE_DURATION):
         logger.info("📦 Usando caché de divisas")
         return dolar_cache["datos"]
     
+    # Límite de seguridad
     if dolar_cache["peticiones_hoy"] >= 300:
         logger.warning("⚠️ Límite de peticiones diarias alcanzado (300)")
         if dolar_cache["datos"]:
             return dolar_cache["datos"]
         return None
     
+    # Hacer petición
     success, data = _get_dolar_eltoque()
     
     if success and data:
@@ -146,6 +204,7 @@ def get_divisas():
     return None
 
 def formatear_divisas(data):
+    """Formatea los datos de divisas para mostrarlos."""
     fecha = get_cuba_time().strftime('%d/%m/%Y %I:%M %p')
     hora_actual = get_cuba_time().strftime('%I:%M %p')
     
@@ -155,19 +214,24 @@ def formatear_divisas(data):
         mensaje += f"{E['calendario']} *Fecha:* {fecha}\n"
         mensaje += f"{E['hora']} *Hora:* {hora_actual}\n\n"
         
-        if data.get('blue'):
-            mensaje += f"{E['blue']} *USD Blue:* `{data['blue']:,.0f}` CUP\n"
-        if data.get('oficial'):
-            mensaje += f"{E['oficial']} *USD Oficial:* `{data['oficial']:,.0f}` CUP\n"
-        if data.get('euro') or data.get('eur'):
-            euro = data.get('euro') or data.get('eur')
-            mensaje += f"{E['euro']} *EUR:* `{euro:,.0f}` CUP\n"
-        if data.get('mlc'):
-            mensaje += f"{E['mlc']} *MLC:* `{data['mlc']:,.0f}` CUP\n"
-        if data.get('gbp'):
-            mensaje += f"{E['libra']} *GBP:* `{data['gbp']:,.0f}` CUP\n"
-        if data.get('mxn'):
-            mensaje += f"{E['peso_mx']} *MXN:* `{data['mxn']:,.0f}` CUP\n"
+        # Manejar diferentes estructuras de respuesta
+        if isinstance(data, dict):
+            # Buscar datos en diferentes niveles
+            datos = data.get('data', data)
+            
+            if datos.get('blue'):
+                mensaje += f"{E['blue']} *USD Blue:* `{datos['blue']:,.0f}` CUP\n"
+            if datos.get('oficial'):
+                mensaje += f"{E['oficial']} *USD Oficial:* `{datos['oficial']:,.0f}` CUP\n"
+            if datos.get('euro') or datos.get('eur'):
+                euro = datos.get('euro') or datos.get('eur')
+                mensaje += f"{E['euro']} *EUR:* `{euro:,.0f}` CUP\n"
+            if datos.get('mlc'):
+                mensaje += f"{E['mlc']} *MLC:* `{datos['mlc']:,.0f}` CUP\n"
+            if datos.get('gbp'):
+                mensaje += f"{E['libra']} *GBP:* `{datos['gbp']:,.0f}` CUP\n"
+            if datos.get('mxn'):
+                mensaje += f"{E['peso_mx']} *MXN:* `{datos['mxn']:,.0f}` CUP\n"
         
         mensaje += f"\n───────────────────\n"
         mensaje += f"{E['fuente']} *Fuente:* elTOQUE.com\n"
@@ -177,6 +241,7 @@ def formatear_divisas(data):
         
         return mensaje
     else:
+        # Fallback con datos estimados
         mensaje = f"{E['divisas']} *DIVISAS EN CUBA*\n"
         mensaje += f"═══════════════════\n\n"
         mensaje += f"{E['calendario']} *Fecha:* {fecha}\n"
@@ -193,7 +258,7 @@ def formatear_divisas(data):
         
         return mensaje
 
-# ========== MANEJADOR DE ERRORES AMIGABLE ==========
+# ========== MANEJADOR DE ERRORES ==========
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Maneja errores y envía mensajes amigables."""
     logger.error(f"❌ Error: {context.error}")
@@ -208,8 +273,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"• Error temporal del bot\n\n"
         f"{E['recomendacion']} *Recomendación:*\n"
         f"• Intenta de nuevo en unos minutos\n"
-        f"• Usa el comando /ayuda para ver opciones\n"
-        f"• Si el problema persiste, contacta al desarrollador\n\n"
+        f"• Usa el comando /ayuda para ver opciones\n\n"
         f"───────────────────\n"
         f"_¡Gracias por tu comprensión!_ 🙏"
     )
@@ -247,7 +311,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{E['analisis']} *DolarCubaAnalisisBot*\n"
         f"Tu asistente económico 🇨🇺\n\n"
         f"{E['usuario']} *Estado:* {'⭐ Premium' if is_premium else '🟢 Gratuito'}\n"
-        f"{E['divisas']} *Divisas disponibles:* USD (Blue/Oficial), EUR, MLC\n\n"
+        f"{E['divisas']} *Divisas:* USD (Blue/Oficial), EUR, MLC\n\n"
         f"Usa los botones del teclado 👇"
     )
 
@@ -264,8 +328,9 @@ async def handle_dolar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         divisas_data = get_divisas()
         
         if divisas_data:
-            blue = divisas_data.get('blue')
-            oficial = divisas_data.get('oficial')
+            datos = divisas_data.get('data', divisas_data) if isinstance(divisas_data, dict) else {}
+            blue = datos.get('blue')
+            oficial = datos.get('oficial')
             fecha = get_cuba_time().strftime('%d/%m/%Y %I:%M %p')
             
             mensaje = f"{E['dolar']} *DÓLAR EN CUBA*\n"
@@ -296,15 +361,11 @@ async def handle_dolar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         logger.error(f"Error en handle_dolar: {e}")
-        # Mensaje amigable en caso de error
         mensaje_error = (
             f"{E['alerta']} *ERROR AL OBTENER DATOS*\n"
             f"═══════════════════\n\n"
-            f"No pudimos obtener el precio del dólar en este momento. 😓\n\n"
-            f"{E['recomendacion']} *Recomendación:*\n"
-            f"• Intenta de nuevo en unos minutos\n"
-            f"• Verifica tu conexión a internet\n\n"
-            f"_¡Gracias por tu paciencia!_ 🙏"
+            f"No pudimos obtener el precio del dólar. 😓\n\n"
+            f"_Intenta de nuevo en unos minutos._"
         )
         await update.message.reply_text(
             mensaje_error,
@@ -326,17 +387,8 @@ async def handle_divisas(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         logger.error(f"Error en handle_divisas: {e}")
-        mensaje_error = (
-            f"{E['alerta']} *ERROR AL OBTENER DIVISAS*\n"
-            f"═══════════════════\n\n"
-            f"No pudimos obtener los datos de las divisas. 😓\n\n"
-            f"{E['recomendacion']} *Recomendación:*\n"
-            f"• Intenta de nuevo en unos minutos\n"
-            f"• Usa el comando /dolar para solo el dólar\n\n"
-            f"_¡Gracias por tu comprensión!_ 🙏"
-        )
         await update.message.reply_text(
-            mensaje_error,
+            f"{E['alerta']} *Error al obtener divisas*\n\nIntenta de nuevo en unos minutos.",
             reply_markup=get_main_keyboard(),
             parse_mode="Markdown"
         )
@@ -404,7 +456,6 @@ async def handle_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"• Alertas personalizadas\n"
             f"• Análisis con IA\n"
             f"• Reportes exclusivos\n\n"
-            f"Cupos: *{500 - len(premium_data['users'])} / 500*\n\n"
             f"¿Te unes a la lista de espera?\n"
             f"Usa el comando /unirse"
         )
@@ -448,14 +499,12 @@ async def handle_ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown",
     )
 
-# ========== BOTÓN COMPARTIR ==========
 async def handle_compartir(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.chat.send_action(action="typing")
     
     keyboard = [
         [InlineKeyboardButton("📤 Compartir en Telegram", url="https://t.me/share/url?url=https://t.me/DolarCubaAnalisisBot")],
         [InlineKeyboardButton("📋 Copiar enlace", callback_data="copiar_enlace")],
-        [InlineKeyboardButton("🔙 Volver", callback_data="back_start")],
     ]
     
     mensaje = (
@@ -464,10 +513,6 @@ async def handle_compartir(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"¡Ayuda a más personas a conocer el bot!\n\n"
         f"{E['info']} *Link del bot:*\n"
         f"`https://t.me/DolarCubaAnalisisBot`\n\n"
-        f"{E['recomendacion']} *¿Cómo compartir?*\n"
-        f"1. Comparte el enlace en grupos\n"
-        f"2. Envía el enlace a tus contactos\n"
-        f"3. Publica en redes sociales\n\n"
         f"───────────────────\n"
         f"_{'¡Gracias por ayudar a crecer la comunidad!'}_ 🙏"
     )
@@ -487,49 +532,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     
     if query.data == "copiar_enlace":
-        # Mostrar mensaje con el enlace para copiar
         mensaje = (
             f"📋 *COPIA EL ENLACE*\n"
             f"═══════════════════\n\n"
             f"`https://t.me/DolarCubaAnalisisBot`\n\n"
             f"Selecciona el texto y cópialo 📋"
         )
-        await query.edit_message_text(
-            mensaje,
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Volver", callback_data="volver_compartir")]
-            ])
-        )
-    
-    elif query.data == "volver_compartir":
-        # Volver al menú de compartir
-        keyboard = [
-            [InlineKeyboardButton("📤 Compartir en Telegram", url="https://t.me/share/url?url=https://t.me/DolarCubaAnalisisBot")],
-            [InlineKeyboardButton("📋 Copiar enlace", callback_data="copiar_enlace")],
-            [InlineKeyboardButton("🔙 Volver", callback_data="back_start")],
-        ]
-        mensaje = (
-            f"{E['compartir']} *COMPARTE EL BOT*\n"
-            f"═══════════════════\n\n"
-            f"¡Ayuda a más personas a conocer el bot!\n\n"
-            f"{E['info']} *Link del bot:*\n"
-            f"`https://t.me/DolarCubaAnalisisBot`\n\n"
-            f"{E['recomendacion']} *¿Cómo compartir?*\n"
-            f"1. Comparte el enlace en grupos\n"
-            f"2. Envía el enlace a tus contactos\n"
-            f"3. Publica en redes sociales\n\n"
-            f"───────────────────\n"
-            f"_{'¡Gracias por ayudar a crecer la comunidad!'}_ 🙏"
-        )
-        await query.edit_message_text(
-            mensaje,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-            parse_mode="Markdown",
-        )
-    
-    elif query.data == "back_start":
-        await start(update, context)
+        await query.edit_message_text(mensaje, parse_mode="Markdown")
 
 # ========== COMANDOS DE TEXTO ==========
 async def dolar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -581,8 +590,7 @@ async def unirse_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"═══════════════════\n\n"
             f"¡Bienvenido a la lista de espera, {nombre}! 🎉\n\n"
             f"Posición: *{len(premium_data['waitlist'])}*\n\n"
-            f"{E['alerta']} *Te avisaremos cuando haya cupo*\n"
-            f"_Esto puede tomar algunos días._"
+            f"{E['alerta']} *Te avisaremos cuando haya cupo*"
         )
     
     await update.message.reply_text(
@@ -594,6 +602,11 @@ async def unirse_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ========== MAIN ==========
 def main():
     run_health_server()
+    
+    if not ELTOQUE_API_KEY:
+        logger.warning("⚠️ ELTOQUE_API_KEY no configurada - usando datos estimados")
+    else:
+        logger.info("✅ ELTOQUE_API_KEY configurada")
     
     app = Application.builder().token(TOKEN).build()
 
