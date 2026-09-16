@@ -2,6 +2,7 @@ import requests
 import logging
 import json
 import os
+import re
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta
@@ -115,8 +116,7 @@ def get_main_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
 # ========== SISTEMA DE CACHÉ ==========
-# ⚠️ 60 minutos para no agotar el plan gratuito de ScrapingAnt (10,000 peticiones/mes)
-CACHE_DURATION = 60  # minutos
+CACHE_DURATION = 60  # minutos (1 hora)
 
 dolar_cache = {
     "datos": None,
@@ -147,11 +147,12 @@ def _get_dolar_eltoque():
         }
         
         if SCRAPINGANT_KEY:
-            # 🚀 Usar ScrapingAnt para evitar el bloqueo de Cloudflare
+            # ScrapingAnt: parámetros para API JSON
             params = {
                 "x-api-key": SCRAPINGANT_KEY,
                 "url": ELTOQUE_URL,
-                "return_page_source": "false",
+                "return_page_source": "true",
+                "browser": "false",
             }
             logger.info("🌐 Petición a elTOQUE vía ScrapingAnt...")
             response = requests.get(
@@ -160,34 +161,58 @@ def _get_dolar_eltoque():
                 headers=headers,
                 timeout=60
             )
+            
+            logger.info(f"📡 Respuesta ScrapingAnt - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                # ScrapingAnt devuelve el JSON como texto, hay que parsearlo
+                try:
+                    data = response.json()
+                    logger.info("✅ JSON parseado directamente")
+                except Exception as json_error:
+                    logger.warning(f"⚠️ Respuesta no es JSON directo: {json_error}")
+                    logger.info(f"📄 Respuesta cruda (primeros 500 chars): {response.text[:500]}")
+                    
+                    # Intentar extraer JSON del texto
+                    json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
+                    if json_match:
+                        try:
+                            data = json.loads(json_match.group())
+                            logger.info("✅ JSON extraído del texto")
+                        except Exception as e2:
+                            logger.error(f"❌ No se pudo extraer JSON: {e2}")
+                            return False, None
+                    else:
+                        logger.error("❌ No se encontró JSON en la respuesta")
+                        return False, None
+                
+                dolar_cache["peticiones_hoy"] += 1
+                dolar_cache["ultima_peticion"] = get_cuba_time()
+                logger.info(f"✅ elTOQUE OK (petición #{dolar_cache['peticiones_hoy']})")
+                logger.info(f"📊 Datos recibidos: {str(data)[:300]}")
+                return True, data
+            else:
+                logger.error(f"❌ ScrapingAnt error {response.status_code}: {response.text[:300]}")
+                return False, None
         else:
-            # Fallback: petición directa (probablemente bloqueada por Cloudflare)
+            # Fallback: petición directa
             logger.info("🌐 Petición directa a elTOQUE (sin ScrapingAnt)...")
             if CLOUDSCRAPER_AVAILABLE and scraper:
                 response = scraper.get(ELTOQUE_URL, headers=headers, timeout=30)
             else:
                 response = requests.get(ELTOQUE_URL, headers=headers, timeout=30)
-        
-        logger.info(f"📡 Respuesta elTOQUE - Status: {response.status_code}")
-        
-        if response.status_code == 200:
-            data = response.json()
-            dolar_cache["peticiones_hoy"] += 1
-            dolar_cache["ultima_peticion"] = get_cuba_time()
-            logger.info(f"✅ elTOQUE OK (petición #{dolar_cache['peticiones_hoy']})")
-            return True, data
-        elif response.status_code == 403:
-            logger.error(f"❌ elTOQUE bloqueado (403). Respuesta: {response.text[:300]}")
-            return False, None
-        elif response.status_code == 429:
-            logger.warning("⚠️ Rate limit alcanzado en elTOQUE")
-            return False, None
-        elif response.status_code in [401, 402]:
-            logger.error(f"❌ Error de autenticación/pago: {response.status_code}")
-            return False, None
-        else:
-            logger.error(f"❌ elTOQUE error {response.status_code}: {response.text[:300]}")
-            return False, None
+            
+            logger.info(f"📡 Respuesta elTOQUE - Status: {response.status_code}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                dolar_cache["peticiones_hoy"] += 1
+                dolar_cache["ultima_peticion"] = get_cuba_time()
+                logger.info(f"✅ elTOQUE OK (petición #{dolar_cache['peticiones_hoy']})")
+                return True, data
+            else:
+                logger.error(f"❌ elTOQUE error {response.status_code}: {response.text[:300]}")
+                return False, None
             
     except CloudflareChallengeError as e:
         logger.error(f"❌ Cloudflare bloqueó la petición: {e}")
@@ -233,7 +258,6 @@ def formatear_divisas(data):
         mensaje += f"{E['calendario']} *Fecha:* {fecha}\n"
         mensaje += f"{E['hora']} *Hora:* {hora_actual}\n\n"
         
-        # Manejar diferentes estructuras de respuesta
         if isinstance(data, dict):
             datos = data.get('data', data)
             
@@ -259,7 +283,6 @@ def formatear_divisas(data):
         
         return mensaje
     else:
-        # Fallback con datos estimados
         mensaje = f"{E['divisas']} *DIVISAS EN CUBA*\n"
         mensaje += f"═══════════════════\n\n"
         mensaje += f"{E['calendario']} *Fecha:* {fecha}\n"
@@ -278,7 +301,6 @@ def formatear_divisas(data):
 
 # ========== MANEJADOR DE ERRORES ==========
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Maneja errores y envía mensajes amigables."""
     logger.error(f"❌ Error: {context.error}")
     
     mensaje = (
@@ -311,7 +333,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     nombre = user.first_name or user.username or "Usuario"
     user_id = str(user.id)
     
-    # Saludo según la hora
     hora = get_cuba_time().hour
     if 6 <= hora < 12:
         saludo = "🌅 Buenos días"
