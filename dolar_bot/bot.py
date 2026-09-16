@@ -147,56 +147,56 @@ def _get_dolar_eltoque():
         }
         
         if SCRAPINGANT_KEY:
-            # ScrapingAnt: parámetros para API JSON
+            # ScrapingAnt: proxy residencial + navegador real
             params = {
                 "x-api-key": SCRAPINGANT_KEY,
                 "url": ELTOQUE_URL,
+                "browser": "true",
+                "proxy_type": "residential",
+                "proxy_country": "US",
                 "return_page_source": "true",
-                "browser": "false",
             }
-            logger.info("🌐 Petición a elTOQUE vía ScrapingAnt...")
+            logger.info("🌐 Petición a elTOQUE vía ScrapingAnt (residential proxy)...")
             response = requests.get(
                 SCRAPINGANT_URL,
                 params=params,
                 headers=headers,
-                timeout=60
+                timeout=90
             )
             
             logger.info(f"📡 Respuesta ScrapingAnt - Status: {response.status_code}")
             
             if response.status_code == 200:
-                # ScrapingAnt devuelve el JSON como texto, hay que parsearlo
+                # ScrapingAnt devuelve JSON con "content"
                 try:
-                    data = response.json()
-                    logger.info("✅ JSON parseado directamente")
-                except Exception as json_error:
-                    logger.warning(f"⚠️ Respuesta no es JSON directo: {json_error}")
-                    logger.info(f"📄 Respuesta cruda (primeros 500 chars): {response.text[:500]}")
+                    result = response.json()
+                    content = result.get("content", "")
+                    logger.info(f"📄 Contenido (primeros 300 chars): {content[:300]}")
                     
-                    # Intentar extraer JSON del texto
-                    json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
-                    if json_match:
-                        try:
-                            data = json.loads(json_match.group())
-                            logger.info("✅ JSON extraído del texto")
-                        except Exception as e2:
-                            logger.error(f"❌ No se pudo extraer JSON: {e2}")
-                            return False, None
+                    # Parsear el JSON de elTOQUE que está dentro de "content"
+                    if content:
+                        data = json.loads(content)
+                        logger.info("✅ JSON de elTOQUE parseado")
                     else:
-                        logger.error("❌ No se encontró JSON en la respuesta")
-                        return False, None
-                
-                dolar_cache["peticiones_hoy"] += 1
-                dolar_cache["ultima_peticion"] = get_cuba_time()
-                logger.info(f"✅ elTOQUE OK (petición #{dolar_cache['peticiones_hoy']})")
-                logger.info(f"📊 Datos recibidos: {str(data)[:300]}")
-                return True, data
+                        data = result
+                        logger.info("✅ Usando respuesta directa")
+                    
+                    dolar_cache["peticiones_hoy"] += 1
+                    dolar_cache["ultima_peticion"] = get_cuba_time()
+                    logger.info(f"✅ elTOQUE OK (petición #{dolar_cache['peticiones_hoy']})")
+                    logger.info(f"📊 Datos: {str(data)[:300]}")
+                    return True, data
+                    
+                except Exception as parse_error:
+                    logger.error(f"❌ Error parseando JSON: {parse_error}")
+                    logger.info(f"📄 Respuesta cruda: {response.text[:500]}")
+                    return False, None
             else:
                 logger.error(f"❌ ScrapingAnt error {response.status_code}: {response.text[:300]}")
                 return False, None
         else:
             # Fallback: petición directa
-            logger.info("🌐 Petición directa a elTOQUE (sin ScrapingAnt)...")
+            logger.info("🌐 Petición directa a elTOQUE...")
             if CLOUDSCRAPER_AVAILABLE and scraper:
                 response = scraper.get(ELTOQUE_URL, headers=headers, timeout=30)
             else:
@@ -225,19 +225,16 @@ def get_divisas():
     """Obtiene todas las divisas con caché y límite de peticiones."""
     global dolar_cache
     
-    # Verificar caché
     if dolar_cache["timestamp"] and (get_cuba_time() - dolar_cache["timestamp"]) < timedelta(minutes=CACHE_DURATION):
         logger.info("📦 Usando caché de divisas")
         return dolar_cache["datos"]
     
-    # Límite de seguridad
     if dolar_cache["peticiones_hoy"] >= 300:
         logger.warning("⚠️ Límite de peticiones diarias alcanzado (300)")
         if dolar_cache["datos"]:
             return dolar_cache["datos"]
         return None
     
-    # Hacer petición
     success, data = _get_dolar_eltoque()
     
     if success and data:
