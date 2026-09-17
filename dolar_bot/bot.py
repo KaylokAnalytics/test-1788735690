@@ -2,7 +2,6 @@ import requests
 import logging
 import json
 import os
-import base64
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta
@@ -10,16 +9,22 @@ import pytz
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
+# ========== IPLOOP SDK ==========
+try:
+    from iploop import IPLoop
+    IPLOOP_AVAILABLE = True
+except ImportError:
+    IPLOOP_AVAILABLE = False
+    logging.warning("⚠️ iploop-sdk no disponible")
+
 # ========== CONFIGURACIÓN ==========
 TOKEN = os.environ.get("BOT_TOKEN")
 if not TOKEN:
     raise ValueError("❌ BOT_TOKEN no configurado")
 
-# API elTOQUE
 ELTOQUE_API_KEY = os.environ.get("ELTOQUE_API_KEY")
 ELTOQUE_URL = "https://api.eltoque.com/v1/dolar"
 
-# IPLoop (ProxyClaw) - Formato v2
 IPLOOP_API_KEY = os.environ.get("IPLOOP_API_KEY")
 
 logging.basicConfig(
@@ -34,16 +39,16 @@ HAVANA_TZ = pytz.timezone('America/Havana')
 def get_cuba_time():
     return datetime.now(HAVANA_TZ)
 
-# ========== EMOJIS TEMÁTICOS ==========
+# ========== EMOJIS ==========
 E = {
     "dolar": "💵", "blue": "🇺🇸", "oficial": "🏛️", "euro": "🇪🇺", "mlc": "💳",
     "analisis": "📊", "premium": "⭐", "alerta": "⚠️", "check": "✅", "info": "ℹ️",
-    "calendario": "📅", "tendencia": "📈", "ayuda": "🆘", "volver": "🔙", "usuario": "👤",
-    "dinero": "💰", "grafico": "📈", "noticia": "📰", "recomendacion": "📌", "menu": "🏠",
+    "calendario": "📅", "tendencia": "📈", "ayuda": "🆘", "usuario": "👤",
+    "dinero": "💰", "noticia": "📰", "recomendacion": "📌", "menu": "🏠",
     "fuente": "📡", "divisas": "💱", "hora": "🕐", "compartir": "📤",
 }
 
-# ========== SERVIDOR WEB PARA HEALTH CHECK ==========
+# ========== SERVIDOR WEB ==========
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -72,7 +77,7 @@ def save_premium_users(data):
     with open(PREMIUM_USERS_FILE, "w") as f:
         json.dump(data, f, indent=2)
 
-# ========== TECLADO PRINCIPAL ==========
+# ========== TECLADO ==========
 def get_main_keyboard():
     keyboard = [
         [KeyboardButton(f"{E['dinero']} Dólar"), KeyboardButton(f"{E['divisas']} Todas las divisas")],
@@ -82,66 +87,70 @@ def get_main_keyboard():
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
-# ========== SISTEMA DE CACHÉ ==========
+# ========== CACHÉ ==========
 CACHE_DURATION = 60  # minutos
 dolar_cache = {"datos": None, "timestamp": None, "peticiones_hoy": 0, "ultima_peticion": None}
 
-# ========== PETICIÓN A ELTOQUE VÍA IPLOOP (AUTH MANUAL) ==========
+# ========== CLIENTE IPLOOP (SDK con sesión sticky) ==========
+proxy_session = None
+if IPLOOP_AVAILABLE and IPLOOP_API_KEY:
+    try:
+        proxy_client = IPLoop(api_key=IPLOOP_API_KEY, country="CU")
+        # Usar una sesión sticky para mantener la misma IP y la autenticación correcta
+        proxy_session = proxy_client.session()
+        logger.info("✅ IPLoop SDK inicializado con sesión sticky (country='CU')")
+    except Exception as e:
+        logger.warning(f"⚠️ Error inicializando IPLoop SDK: {e}")
+        proxy_session = None
+elif IPLOOP_AVAILABLE:
+    logger.warning("⚠️ IPLOOP_API_KEY no configurada")
+else:
+    logger.warning("⚠️ iploop-sdk no instalado")
+
+# ========== PETICIÓN A ELTOQUE VÍA IPLOOP (SDK) ==========
 def _get_dolar_eltoque():
-    """Obtiene las divisas usando IPLoop (ProxyClaw) con autenticación manual."""
+    """Obtiene las divisas usando el SDK oficial de IPLoop con sesión sticky."""
     if not ELTOQUE_API_KEY:
         logger.warning("⚠️ ELTOQUE_API_KEY no configurada")
         return False, None
 
-    if not IPLOOP_API_KEY:
-        logger.warning("⚠️ IPLOOP_API_KEY no configurada")
+    if not proxy_session:
+        logger.warning("⚠️ Sesión de IPLoop no disponible, usando petición directa")
+        try:
+            headers = {"Authorization": f"Bearer {ELTOQUE_API_KEY}"}
+            response = requests.get(ELTOQUE_URL, headers=headers, timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                dolar_cache["peticiones_hoy"] += 1
+                logger.info(f"✅ elTOQUE OK (directo, petición #{dolar_cache['peticiones_hoy']})")
+                return True, data
+        except Exception as e:
+            logger.warning(f"elTOQUE API error (directo): {e}")
         return False, None
 
     try:
-        headers = {
-            "Authorization": f"Bearer {ELTOQUE_API_KEY}",
-            "Accept": "application/json"
-        }
-
-        # --- Autenticación manual para IPLoop formato v2 ---
-        # Usuario: "iploop", Contraseña: API Key COMPLETA (incluyendo "iploop_")
-        proxy_user = "iploop"
-        proxy_pass = IPLOOP_API_KEY  # 👈 La clave completa, sin modificar
-
-        # Codificar en Base64 para el header Proxy-Authorization
-        credentials = f"{proxy_user}:{proxy_pass}"
-        encoded_credentials = base64.b64encode(credentials.encode('utf-8')).decode('utf-8')
-        headers["Proxy-Authorization"] = f"Basic {encoded_credentials}"
-
-        # El proxy endpoint (sin credenciales en la URL)
-        proxies = {
-            "http": "http://proxy.iploop.io:8880",
-            "https": "http://proxy.iploop.io:8880"
-        }
-
-        logger.info("🌐 Petición a elTOQUE vía IPLoop (auth manual v2)...")
-        response = requests.get(
-            ELTOQUE_URL,
-            headers=headers,
-            proxies=proxies,
-            timeout=60
-        )
-
-        logger.info(f"📡 Respuesta elTOQUE - Status: {response.status_code}")
-
-        if response.status_code == 200:
+        headers = {"Authorization": f"Bearer {ELTOQUE_API_KEY}"}
+        
+        # Usar la sesión sticky del SDK de IPLoop
+        logger.info("🌐 Petición a elTOQUE vía IPLoop SDK (sesión sticky)...")
+        response = proxy_session.fetch(ELTOQUE_URL, headers=headers)
+        
+        # El SDK puede devolver un objeto con .json() o el texto directamente
+        if hasattr(response, 'json'):
             data = response.json()
-            dolar_cache["peticiones_hoy"] += 1
-            dolar_cache["ultima_peticion"] = get_cuba_time()
-            logger.info(f"✅ elTOQUE OK vía IPLoop (petición #{dolar_cache['peticiones_hoy']})")
-            logger.info(f"📊 Datos: {str(data)[:300]}")
-            return True, data
+        elif hasattr(response, 'text'):
+            data = json.loads(response.text)
         else:
-            logger.error(f"❌ elTOQUE error {response.status_code}: {response.text[:300]}")
-            return False, None
+            data = json.loads(str(response))
+        
+        dolar_cache["peticiones_hoy"] += 1
+        dolar_cache["ultima_peticion"] = get_cuba_time()
+        logger.info(f"✅ elTOQUE OK vía IPLoop (petición #{dolar_cache['peticiones_hoy']})")
+        logger.info(f"📊 Datos: {str(data)[:300]}")
+        return True, data
 
     except Exception as e:
-        logger.warning(f"elTOQUE API error (IPLoop manual): {e}")
+        logger.warning(f"elTOQUE API error (IPLoop SDK): {e}")
         return False, None
 
 def get_divisas():
@@ -190,10 +199,6 @@ def formatear_divisas(data):
                 mensaje += f"{E['euro']} *EUR:* `{euro:,.0f}` CUP\n"
             if datos.get('mlc'):
                 mensaje += f"{E['mlc']} *MLC:* `{datos['mlc']:,.0f}` CUP\n"
-            if datos.get('gbp'):
-                mensaje += f"{E['libra']} *GBP:* `{datos['gbp']:,.0f}` CUP\n"
-            if datos.get('mxn'):
-                mensaje += f"{E['peso_mx']} *MXN:* `{datos['mxn']:,.0f}` CUP\n"
 
         mensaje += f"\n───────────────────\n"
         mensaje += f"{E['fuente']} *Fuente:* elTOQUE.com\n"
@@ -227,13 +232,6 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{E['alerta']} *UPS! ALGO SALIÓ MAL*\n"
         f"═══════════════════\n\n"
         f"Lo sentimos, ha ocurrido un error inesperado. 😓\n\n"
-        f"{E['info']} *Posibles causas:*\n"
-        f"• Problemas de conexión\n"
-        f"• La API de elTOQUE está fuera de línea\n"
-        f"• Error temporal del bot\n\n"
-        f"{E['recomendacion']} *Recomendación:*\n"
-        f"• Intenta de nuevo en unos minutos\n"
-        f"• Usa el comando /ayuda para ver opciones\n\n"
         f"───────────────────\n"
         f"_¡Gracias por tu comprensión!_ 🙏"
     )
@@ -320,14 +318,8 @@ async def handle_dolar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         logger.error(f"Error en handle_dolar: {e}")
-        mensaje_error = (
-            f"{E['alerta']} *ERROR AL OBTENER DATOS*\n"
-            f"═══════════════════\n\n"
-            f"No pudimos obtener el precio del dólar. 😓\n\n"
-            f"_Intenta de nuevo en unos minutos._"
-        )
         await update.message.reply_text(
-            mensaje_error,
+            f"{E['alerta']} *ERROR AL OBTENER DATOS*\n\nNo pudimos obtener el precio del dólar. 😓\n\n_Intenta de nuevo en unos minutos._",
             reply_markup=get_main_keyboard(),
             parse_mode="Markdown"
         )
@@ -443,10 +435,6 @@ async def handle_ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"/unirse - Unirse a lista premium\n"
         f"/compartir - Compartir el bot\n"
         f"/ayuda - Este mensaje\n\n"
-        f"*Divisas disponibles:*\n"
-        f"• USD (Blue y Oficial)\n"
-        f"• EUR (Euro)\n"
-        f"• MLC\n\n"
         f"───────────────────\n"
         f"{E['fuente']} *Fuente de datos:* elTOQUE.com\n"
         f"───────────────────\n"
@@ -563,12 +551,12 @@ def main():
     run_health_server()
 
     if not ELTOQUE_API_KEY:
-        logger.warning("⚠️ ELTOQUE_API_KEY no configurada - usando datos estimados")
+        logger.warning("⚠️ ELTOQUE_API_KEY no configurada")
     else:
         logger.info("✅ ELTOQUE_API_KEY configurada")
 
     if not IPLOOP_API_KEY:
-        logger.warning("⚠️ IPLOOP_API_KEY no configurada - no se usará proxy")
+        logger.warning("⚠️ IPLOOP_API_KEY no configurada")
     else:
         logger.info("✅ IPLOOP_API_KEY configurada")
 
@@ -584,7 +572,7 @@ def main():
     app.add_handler(CommandHandler("compartir", compartir_command))
     app.add_handler(CommandHandler("unirse", unirse_command))
 
-    # Manejadores de texto para botones del teclado
+    # Botones del teclado
     app.add_handler(MessageHandler(filters.Regex(f"^{E['dinero']} Dólar$"), handle_dolar))
     app.add_handler(MessageHandler(filters.Regex(f"^{E['divisas']} Todas las divisas$"), handle_divisas))
     app.add_handler(MessageHandler(filters.Regex(f"^{E['analisis']} Análisis$"), handle_analisis))
@@ -596,7 +584,7 @@ def main():
     # Callbacks
     app.add_handler(CallbackQueryHandler(button_callback))
 
-    # Manejador de errores global
+    # Errores
     app.add_error_handler(error_handler)
 
     logger.info("🤖 Bot DolarCubaAnalisisBot iniciado correctamente")
