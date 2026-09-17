@@ -16,7 +16,7 @@ TOKEN = os.environ.get("BOT_TOKEN")
 if not TOKEN:
     raise ValueError("❌ BOT_TOKEN no configurado")
 
-# ✅ Canal correcto de elTOQUE (nuevo canal)
+# Canal de Telegram de elTOQUE (nuevo canal)
 TELEGRAM_CHANNEL_URL = "https://t.me/s/eltoquecom2"
 
 # Tasa oficial (fija, del BCC)
@@ -62,6 +62,7 @@ def run_health_server():
 
 # ========== USUARIOS PREMIUM ==========
 PREMIUM_USERS_FILE = "premium_users.json"
+
 def load_premium_users():
     try:
         with open(PREMIUM_USERS_FILE, "r") as f:
@@ -84,7 +85,8 @@ def get_main_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
 # ========== CACHÉ ==========
-CACHE_DURATION = 30  # minutos
+CACHE_DURATION = 15  # minutos
+
 dolar_cache = {"datos": None, "timestamp": None, "peticiones_hoy": 0, "ultima_peticion": None}
 
 # ========== SCRAPING DEL CANAL DE TELEGRAM ==========
@@ -115,7 +117,6 @@ def _get_tasas_desde_telegram():
 
         for msg in messages:
             texto = msg.get_text()
-            
             fecha_match = re.search(r'Fecha[:\s]+(\d{2}/\d{2}/\d{4})', texto, re.IGNORECASE)
             usd_match = re.search(r'USD[:\s]+([\d,.]+)', texto, re.IGNORECASE)
             eur_match = re.search(r'EUR[:\s]+([\d,.]+)', texto, re.IGNORECASE)
@@ -556,6 +557,7 @@ def main():
     run_health_server()
 
     logger.info("✅ Bot configurado para usar scraping de Telegram (@eltoquecom2)")
+    logger.info(f"⏱️ Caché configurado a {CACHE_DURATION} minutos")
 
     app = Application.builder().token(TOKEN).build()
 
