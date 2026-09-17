@@ -2,21 +2,13 @@ import requests
 import logging
 import json
 import os
+import base64
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta
 import pytz
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
-
-# ========== CLOUDSCRAPER (opcional, fallback) ==========
-try:
-    import cloudscraper
-    from cloudscraper.exceptions import CloudflareChallengeError
-    CLOUDSCRAPER_AVAILABLE = True
-except ImportError:
-    CLOUDSCRAPER_AVAILABLE = False
-    logging.warning("⚠️ cloudscraper no disponible")
 
 # ========== CONFIGURACIÓN ==========
 TOKEN = os.environ.get("BOT_TOKEN")
@@ -94,24 +86,16 @@ def get_main_keyboard():
 CACHE_DURATION = 60  # minutos (1 hora)
 dolar_cache = {"datos": None, "timestamp": None, "peticiones_hoy": 0, "ultima_peticion": None}
 
-# ========== CLIENTE HTTP (fallback) ==========
-if CLOUDSCRAPER_AVAILABLE:
-    scraper = cloudscraper.create_scraper(
-        browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
-    )
-else:
-    scraper = None
-
-# ========== PETICIÓN A ELTOQUE VÍA IPLOOP (MÉTODO MANUAL) ==========
+# ========== PETICIÓN A ELTOQUE VÍA IPLOOP (AUTH MANUAL) ==========
 def _get_dolar_eltoque():
-    """Obtiene las divisas usando IPLoop (ProxyClaw) de forma manual."""
+    """Obtiene las divisas usando IPLoop (ProxyClaw) con autenticación manual."""
     if not ELTOQUE_API_KEY:
         logger.warning("⚠️ ELTOQUE_API_KEY no configurada")
         return False, None
-    
+
     if not IPLOOP_API_KEY:
         logger.warning("⚠️ IPLOOP_API_KEY no configurada")
-        # Fallback a petición directa si no hay proxy
+        # Fallback a petición directa
         try:
             headers = {"Authorization": f"Bearer {ELTOQUE_API_KEY}"}
             response = requests.get(ELTOQUE_URL, headers=headers, timeout=30)
@@ -129,25 +113,29 @@ def _get_dolar_eltoque():
             "Authorization": f"Bearer {ELTOQUE_API_KEY}",
             "Accept": "application/json"
         }
-        
-        # --- Construcción manual del proxy ---
-        # Formato: http://usuario:contraseña@host:puerto
+
+        # --- Autenticación manual del proxy (soluciona el error 407) ---
         proxy_user = "iploop"
         proxy_pass = IPLOOP_API_KEY
-        
-        proxy_url = f"http://{proxy_user}:{proxy_pass}@proxy.iploop.io:8880"
-        proxies = {"http": proxy_url, "https": proxy_url}
-        
-        logger.info("🌐 Petición a elTOQUE vía IPLoop (manual)...")
+        credentials = f"{proxy_user}:{proxy_pass}"
+        encoded_credentials = base64.b64encode(credentials.encode('utf-8')).decode('utf-8')
+        headers["Proxy-Authorization"] = f"Basic {encoded_credentials}"
+
+        proxies = {
+            "http": "http://proxy.iploop.io:8880",
+            "https": "http://proxy.iploop.io:8880"
+        }
+
+        logger.info("🌐 Petición a elTOQUE vía IPLoop (auth manual)...")
         response = requests.get(
             ELTOQUE_URL,
             headers=headers,
             proxies=proxies,
             timeout=60
         )
-        
+
         logger.info(f"📡 Respuesta elTOQUE - Status: {response.status_code}")
-        
+
         if response.status_code == 200:
             data = response.json()
             dolar_cache["peticiones_hoy"] += 1
@@ -158,7 +146,7 @@ def _get_dolar_eltoque():
         else:
             logger.error(f"❌ elTOQUE error {response.status_code}: {response.text[:300]}")
             return False, None
-            
+
     except Exception as e:
         logger.warning(f"elTOQUE API error (IPLoop manual): {e}")
         return False, None
