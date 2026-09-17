@@ -33,12 +33,12 @@ def get_cuba_time():
 
 # ========== EMOJIS ==========
 E = {
-    "dolar": "💵", "blue": "🇺🇸", "euro": "🇪🇺", "mlc": "💳",
+    "blue": "🇺🇸", "euro": "🇪🇺", "mlc": "💳",
     "analisis": "📊", "premium": "⭐", "alerta": "⚠️", "check": "✅", "info": "ℹ️",
     "calendario": "📅", "tendencia": "📈", "ayuda": "🆘", "usuario": "👤",
     "dinero": "💰", "noticia": "📰", "recomendacion": "📌", "menu": "🏠",
     "fuente": "📡", "divisas": "💱", "hora": "🕐", "compartir": "📤",
-    "rango": "📊", "telegram": "📱",
+    "telegram": "📱",
 }
 
 # ========== SERVIDOR WEB ==========
@@ -74,10 +74,9 @@ def save_premium_users(data):
 # ========== TECLADO ==========
 def get_main_keyboard():
     keyboard = [
-        [KeyboardButton(f"{E['dinero']} Dólar"), KeyboardButton(f"{E['divisas']} Todas las divisas")],
-        [KeyboardButton(f"{E['analisis']} Análisis"), KeyboardButton(f"{E['premium']} Premium")],
-        [KeyboardButton(f"{E['ayuda']} Ayuda"), KeyboardButton(f"{E['compartir']} Compartir")],
-        [KeyboardButton(f"{E['menu']} Menú")],
+        [KeyboardButton(f"{E['divisas']} Divisas"), KeyboardButton(f"{E['analisis']} Análisis")],
+        [KeyboardButton(f"{E['premium']} Premium"), KeyboardButton(f"{E['ayuda']} Ayuda")],
+        [KeyboardButton(f"{E['compartir']} Compartir"), KeyboardButton(f"{E['menu']} Menú")],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
@@ -192,7 +191,7 @@ def formatear_divisas(data):
         mensaje += f"{E['hora']} *Hora:* {hora_actual}\n\n"
 
         if data.get('blue'):
-            mensaje += f"{E['blue']} *USD Blue:* `{data['blue']:,.2f}` CUP\n"
+            mensaje += f"{E['blue']} *USD:* `{data['blue']:,.2f}` CUP\n"
         if data.get('eur'):
             mensaje += f"{E['euro']} *EUR:* `{data['eur']:,.2f}` CUP\n"
         if data.get('mlc'):
@@ -211,7 +210,7 @@ def formatear_divisas(data):
         mensaje += f"═══════════════════\n\n"
         mensaje += f"{E['calendario']} *Fecha:* {fecha}\n"
         mensaje += f"{E['hora']} *Hora:* {hora_actual}\n\n"
-        mensaje += f"{E['blue']} *USD Blue:* `700.00` CUP\n"
+        mensaje += f"{E['blue']} *USD:* `700.00` CUP\n"
         mensaje += f"{E['euro']} *EUR:* `797.50` CUP\n"
         mensaje += f"{E['mlc']} *MLC:* `455.39` CUP\n\n"
         mensaje += f"───────────────────\n"
@@ -266,7 +265,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{E['analisis']} *DolarCubaAnalisisBot*\n"
         f"Tu asistente económico 🇨🇺\n\n"
         f"{E['usuario']} *Estado:* {'⭐ Premium' if is_premium else '🟢 Gratuito'}\n"
-        f"{E['divisas']} *Divisas:* USD Blue, EUR, MLC\n\n"
+        f"{E['divisas']} *Divisas:* USD, EUR, MLC\n\n"
         f"Usa los botones del teclado 👇"
     )
 
@@ -275,49 +274,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_main_keyboard(),
         parse_mode="Markdown",
     )
-
-async def handle_dolar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.chat.send_action(action="typing")
-
-    try:
-        divisas_data = get_divisas()
-
-        if divisas_data:
-            blue = divisas_data.get('blue')
-            fecha = get_cuba_time().strftime('%d/%m/%Y %I:%M %p')
-
-            mensaje = f"{E['dolar']} *DÓLAR EN CUBA*\n"
-            mensaje += f"═══════════════════\n\n"
-            if blue:
-                mensaje += f"{E['blue']} *Blue:* `{blue:,.2f}` CUP\n"
-            mensaje += f"\n{E['calendario']} *Fecha:* {fecha}\n"
-            if divisas_data.get('fecha_eltoque'):
-                mensaje += f"{E['telegram']} *Publicado:* {divisas_data['fecha_eltoque']}\n"
-            mensaje += f"───────────────────\n"
-            mensaje += f"{E['fuente']} *Fuente:* elTOQUE.com\n"
-            mensaje += f"───────────────────\n"
-            mensaje += f"_{'Datos del mercado cambiario cubano'}_"
-        else:
-            mensaje = (
-                f"{E['dolar']} *DÓLAR EN CUBA*\n"
-                f"═══════════════════\n\n"
-                f"{E['blue']} *Blue:* `700.00` CUP\n\n"
-                f"{E['fuente']} *Fuente:* elTOQUE.com (estimado)\n"
-                f"{E['alerta']} *Nota:* Datos estimados por fallo de fuente"
-            )
-
-        await update.message.reply_text(
-            mensaje,
-            reply_markup=get_main_keyboard(),
-            parse_mode="Markdown",
-        )
-    except Exception as e:
-        logger.error(f"Error en handle_dolar: {e}")
-        await update.message.reply_text(
-            f"{E['alerta']} *ERROR AL OBTENER DATOS*\n\nNo pudimos obtener el precio del dólar. 😓\n\n_Intenta de nuevo en unos minutos._",
-            reply_markup=get_main_keyboard(),
-            parse_mode="Markdown"
-        )
 
 async def handle_divisas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.chat.send_action(action="typing")
@@ -423,7 +379,6 @@ async def handle_ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"═══════════════════\n\n"
         f"*Comandos disponibles:*\n"
         f"/start - Menú principal\n"
-        f"/dolar - Precio del dólar\n"
         f"/divisas - Todas las divisas\n"
         f"/analisis - Análisis económico\n"
         f"/premium - Info de suscripción\n"
@@ -483,9 +438,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(mensaje, parse_mode="Markdown")
 
 # ========== COMANDOS DE TEXTO ==========
-async def dolar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await handle_dolar(update, context)
-
 async def divisas_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await handle_divisas(update, context)
 
@@ -552,7 +504,6 @@ def main():
 
     # Comandos
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("dolar", dolar_command))
     app.add_handler(CommandHandler("divisas", divisas_command))
     app.add_handler(CommandHandler("analisis", analisis_command))
     app.add_handler(CommandHandler("premium", premium_command))
@@ -561,8 +512,7 @@ def main():
     app.add_handler(CommandHandler("unirse", unirse_command))
 
     # Botones del teclado
-    app.add_handler(MessageHandler(filters.Regex(f"^{E['dinero']} Dólar$"), handle_dolar))
-    app.add_handler(MessageHandler(filters.Regex(f"^{E['divisas']} Todas las divisas$"), handle_divisas))
+    app.add_handler(MessageHandler(filters.Regex(f"^{E['divisas']} Divisas$"), handle_divisas))
     app.add_handler(MessageHandler(filters.Regex(f"^{E['analisis']} Análisis$"), handle_analisis))
     app.add_handler(MessageHandler(filters.Regex(f"^{E['premium']} Premium$"), handle_premium))
     app.add_handler(MessageHandler(filters.Regex(f"^{E['ayuda']} Ayuda$"), handle_ayuda))
