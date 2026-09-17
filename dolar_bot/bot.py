@@ -2,30 +2,25 @@ import requests
 import logging
 import json
 import os
+import re
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta
 import pytz
+from bs4 import BeautifulSoup
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
-
-# ========== IPLOOP SDK ==========
-try:
-    from iploop import IPLoop
-    IPLOOP_AVAILABLE = True
-except ImportError:
-    IPLOOP_AVAILABLE = False
-    logging.warning("⚠️ iploop-sdk no disponible")
 
 # ========== CONFIGURACIÓN ==========
 TOKEN = os.environ.get("BOT_TOKEN")
 if not TOKEN:
     raise ValueError("❌ BOT_TOKEN no configurado")
 
-ELTOQUE_API_KEY = os.environ.get("ELTOQUE_API_KEY")
-ELTOQUE_URL = "https://api.eltoque.com/v1/dolar"
+# ✅ Canal correcto de elTOQUE (nuevo canal)
+TELEGRAM_CHANNEL_URL = "https://t.me/s/eltoquecom2"
 
-IPLOOP_API_KEY = os.environ.get("IPLOOP_API_KEY")
+# Tasa oficial (fija, del BCC)
+TASA_OFICIAL = 24
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -46,6 +41,7 @@ E = {
     "calendario": "📅", "tendencia": "📈", "ayuda": "🆘", "usuario": "👤",
     "dinero": "💰", "noticia": "📰", "recomendacion": "📌", "menu": "🏠",
     "fuente": "📡", "divisas": "💱", "hora": "🕐", "compartir": "📤",
+    "rango": "📊", "telegram": "📱",
 }
 
 # ========== SERVIDOR WEB ==========
@@ -88,90 +84,101 @@ def get_main_keyboard():
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
 # ========== CACHÉ ==========
-CACHE_DURATION = 60  # minutos
+CACHE_DURATION = 30  # minutos
 dolar_cache = {"datos": None, "timestamp": None, "peticiones_hoy": 0, "ultima_peticion": None}
 
-# ========== CLIENTE IPLOOP (SDK con sesión sticky) ==========
-proxy_session = None
-if IPLOOP_AVAILABLE and IPLOOP_API_KEY:
+# ========== SCRAPING DEL CANAL DE TELEGRAM ==========
+def _get_tasas_desde_telegram():
+    """Extrae las tasas MÁS RECIENTES del canal de Telegram de elTOQUE."""
     try:
-        proxy_client = IPLoop(api_key=IPLOOP_API_KEY, country="CU")
-        # Usar una sesión sticky para mantener la misma IP y la autenticación correcta
-        proxy_session = proxy_client.session()
-        logger.info("✅ IPLoop SDK inicializado con sesión sticky (country='CU')")
-    except Exception as e:
-        logger.warning(f"⚠️ Error inicializando IPLoop SDK: {e}")
-        proxy_session = None
-elif IPLOOP_AVAILABLE:
-    logger.warning("⚠️ IPLOOP_API_KEY no configurada")
-else:
-    logger.warning("⚠️ iploop-sdk no instalado")
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "es-ES,es;q=0.9,en;q=0.8"
+        }
 
-# ========== PETICIÓN A ELTOQUE VÍA IPLOOP (SDK) ==========
-def _get_dolar_eltoque():
-    """Obtiene las divisas usando el SDK oficial de IPLoop con sesión sticky."""
-    if not ELTOQUE_API_KEY:
-        logger.warning("⚠️ ELTOQUE_API_KEY no configurada")
-        return False, None
+        logger.info("🌐 Obteniendo tasas del canal de Telegram de elTOQUE...")
+        response = requests.get(TELEGRAM_CHANNEL_URL, headers=headers, timeout=30)
 
-    if not proxy_session:
-        logger.warning("⚠️ Sesión de IPLoop no disponible, usando petición directa")
-        try:
-            headers = {"Authorization": f"Bearer {ELTOQUE_API_KEY}"}
-            response = requests.get(ELTOQUE_URL, headers=headers, timeout=30)
-            if response.status_code == 200:
-                data = response.json()
-                dolar_cache["peticiones_hoy"] += 1
-                logger.info(f"✅ elTOQUE OK (directo, petición #{dolar_cache['peticiones_hoy']})")
-                return True, data
-        except Exception as e:
-            logger.warning(f"elTOQUE API error (directo): {e}")
-        return False, None
+        if response.status_code != 200:
+            logger.error(f"❌ Error al acceder al canal: {response.status_code}")
+            return False, None
 
-    try:
-        headers = {"Authorization": f"Bearer {ELTOQUE_API_KEY}"}
-        
-        # Usar la sesión sticky del SDK de IPLoop
-        logger.info("🌐 Petición a elTOQUE vía IPLoop SDK (sesión sticky)...")
-        response = proxy_session.fetch(ELTOQUE_URL, headers=headers)
-        
-        # El SDK puede devolver un objeto con .json() o el texto directamente
-        if hasattr(response, 'json'):
-            data = response.json()
-        elif hasattr(response, 'text'):
-            data = json.loads(response.text)
-        else:
-            data = json.loads(str(response))
-        
-        dolar_cache["peticiones_hoy"] += 1
-        dolar_cache["ultima_peticion"] = get_cuba_time()
-        logger.info(f"✅ elTOQUE OK vía IPLoop (petición #{dolar_cache['peticiones_hoy']})")
-        logger.info(f"📊 Datos: {str(data)[:300]}")
+        soup = BeautifulSoup(response.text, 'html.parser')
+        messages = soup.find_all('div', class_='tgme_widget_message_text')
+
+        if not messages:
+            logger.warning("⚠️ No se encontraron mensajes en el canal")
+            return False, None
+
+        mensajes_con_tasas = []
+
+        for msg in messages:
+            texto = msg.get_text()
+            
+            fecha_match = re.search(r'Fecha[:\s]+(\d{2}/\d{2}/\d{4})', texto, re.IGNORECASE)
+            usd_match = re.search(r'USD[:\s]+([\d,.]+)', texto, re.IGNORECASE)
+            eur_match = re.search(r'EUR[:\s]+([\d,.]+)', texto, re.IGNORECASE)
+            mlc_match = re.search(r'MLC[:\s]+([\d,.]+)', texto, re.IGNORECASE)
+
+            if usd_match and fecha_match:
+                fecha_str = fecha_match.group(1)
+                try:
+                    fecha_dt = datetime.strptime(fecha_str, '%d/%m/%Y')
+                except:
+                    continue
+
+                usd_valor = float(usd_match.group(1).replace(',', ''))
+                eur_valor = float(eur_match.group(1).replace(',', '')) if eur_match else None
+                mlc_valor = float(mlc_match.group(1).replace(',', '')) if mlc_match else None
+
+                if usd_valor > 100:
+                    mensajes_con_tasas.append({
+                        "fecha": fecha_dt,
+                        "fecha_str": fecha_str,
+                        "blue": usd_valor,
+                        "eur": eur_valor,
+                        "mlc": mlc_valor,
+                    })
+
+        if not mensajes_con_tasas:
+            logger.warning("⚠️ No se encontraron mensajes con tasas y fecha válida")
+            return False, None
+
+        mensajes_con_tasas.sort(key=lambda x: x["fecha"], reverse=True)
+        mas_reciente = mensajes_con_tasas[0]
+
+        logger.info(f"✅ Tasas extraídas: {mas_reciente['fecha_str']} - USD={mas_reciente['blue']}, EUR={mas_reciente['eur']}, MLC={mas_reciente['mlc']}")
+
+        data = {
+            "blue": mas_reciente["blue"],
+            "oficial": TASA_OFICIAL,
+            "eur": mas_reciente["eur"],
+            "mlc": mas_reciente["mlc"],
+            "fecha_eltoque": mas_reciente["fecha_str"],
+            "fuente": "Telegram @eltoquecom2"
+        }
         return True, data
 
     except Exception as e:
-        logger.warning(f"elTOQUE API error (IPLoop SDK): {e}")
+        logger.warning(f"Error scraping Telegram: {e}")
         return False, None
 
 def get_divisas():
-    """Obtiene todas las divisas con caché y límite de peticiones."""
+    """Obtiene las divisas con caché."""
     global dolar_cache
 
     if dolar_cache["timestamp"] and (get_cuba_time() - dolar_cache["timestamp"]) < timedelta(minutes=CACHE_DURATION):
         logger.info("📦 Usando caché de divisas")
         return dolar_cache["datos"]
 
-    if dolar_cache["peticiones_hoy"] >= 300:
-        logger.warning("⚠️ Límite de peticiones diarias alcanzado (300)")
-        if dolar_cache["datos"]:
-            return dolar_cache["datos"]
-        return None
-
-    success, data = _get_dolar_eltoque()
+    success, data = _get_tasas_desde_telegram()
 
     if success and data:
         dolar_cache["datos"] = data
         dolar_cache["timestamp"] = get_cuba_time()
+        dolar_cache["peticiones_hoy"] += 1
+        dolar_cache["ultima_peticion"] = get_cuba_time()
         return data
 
     return None
@@ -187,22 +194,19 @@ def formatear_divisas(data):
         mensaje += f"{E['calendario']} *Fecha:* {fecha}\n"
         mensaje += f"{E['hora']} *Hora:* {hora_actual}\n\n"
 
-        if isinstance(data, dict):
-            datos = data.get('data', data)
-
-            if datos.get('blue'):
-                mensaje += f"{E['blue']} *USD Blue:* `{datos['blue']:,.0f}` CUP\n"
-            if datos.get('oficial'):
-                mensaje += f"{E['oficial']} *USD Oficial:* `{datos['oficial']:,.0f}` CUP\n"
-            if datos.get('euro') or datos.get('eur'):
-                euro = datos.get('euro') or datos.get('eur')
-                mensaje += f"{E['euro']} *EUR:* `{euro:,.0f}` CUP\n"
-            if datos.get('mlc'):
-                mensaje += f"{E['mlc']} *MLC:* `{datos['mlc']:,.0f}` CUP\n"
+        if data.get('blue'):
+            mensaje += f"{E['blue']} *USD Blue:* `{data['blue']:,.2f}` CUP\n"
+        if data.get('oficial'):
+            mensaje += f"{E['oficial']} *USD Oficial:* `{data['oficial']:,.2f}` CUP\n"
+        if data.get('eur'):
+            mensaje += f"{E['euro']} *EUR:* `{data['eur']:,.2f}` CUP\n"
+        if data.get('mlc'):
+            mensaje += f"{E['mlc']} *MLC:* `{data['mlc']:,.2f}` CUP\n"
 
         mensaje += f"\n───────────────────\n"
         mensaje += f"{E['fuente']} *Fuente:* elTOQUE.com\n"
-        mensaje += f"{E['info']} *Datos actualizados:* {fecha}\n"
+        if data.get('fecha_eltoque'):
+            mensaje += f"{E['telegram']} *Publicado:* {data['fecha_eltoque']}\n"
         mensaje += f"───────────────────\n"
         mensaje += f"_{'Datos del mercado cambiario cubano'}_"
 
@@ -212,13 +216,13 @@ def formatear_divisas(data):
         mensaje += f"═══════════════════\n\n"
         mensaje += f"{E['calendario']} *Fecha:* {fecha}\n"
         mensaje += f"{E['hora']} *Hora:* {hora_actual}\n\n"
-        mensaje += f"{E['blue']} *USD Blue:* `660` CUP\n"
-        mensaje += f"{E['oficial']} *USD Oficial:* `24` CUP\n"
-        mensaje += f"{E['euro']} *EUR:* `700` CUP\n"
-        mensaje += f"{E['mlc']} *MLC:* `245` CUP\n\n"
+        mensaje += f"{E['blue']} *USD Blue:* `700.00` CUP\n"
+        mensaje += f"{E['oficial']} *USD Oficial:* `24.00` CUP\n"
+        mensaje += f"{E['euro']} *EUR:* `797.50` CUP\n"
+        mensaje += f"{E['mlc']} *MLC:* `455.39` CUP\n\n"
         mensaje += f"───────────────────\n"
         mensaje += f"{E['fuente']} *Fuente:* elTOQUE.com (estimado)\n"
-        mensaje += f"{E['alerta']} *Nota:* Datos estimados - API fuera de línea\n"
+        mensaje += f"{E['alerta']} *Nota:* Datos estimados - Canal fuera de línea\n"
         mensaje += f"───────────────────\n"
         mensaje += f"_{'Datos de respaldo basados en tendencias del mercado'}_"
 
@@ -285,18 +289,19 @@ async def handle_dolar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         divisas_data = get_divisas()
 
         if divisas_data:
-            datos = divisas_data.get('data', divisas_data) if isinstance(divisas_data, dict) else {}
-            blue = datos.get('blue')
-            oficial = datos.get('oficial')
+            blue = divisas_data.get('blue')
+            oficial = divisas_data.get('oficial')
             fecha = get_cuba_time().strftime('%d/%m/%Y %I:%M %p')
 
             mensaje = f"{E['dolar']} *DÓLAR EN CUBA*\n"
             mensaje += f"═══════════════════\n\n"
             if blue:
-                mensaje += f"{E['blue']} *Blue:* `{blue:,.0f}` CUP\n"
+                mensaje += f"{E['blue']} *Blue:* `{blue:,.2f}` CUP\n"
             if oficial:
-                mensaje += f"{E['oficial']} *Oficial:* `{oficial:,.0f}` CUP\n"
+                mensaje += f"{E['oficial']} *Oficial:* `{oficial:,.2f}` CUP\n"
             mensaje += f"\n{E['calendario']} *Fecha:* {fecha}\n"
+            if divisas_data.get('fecha_eltoque'):
+                mensaje += f"{E['telegram']} *Publicado:* {divisas_data['fecha_eltoque']}\n"
             mensaje += f"───────────────────\n"
             mensaje += f"{E['fuente']} *Fuente:* elTOQUE.com\n"
             mensaje += f"───────────────────\n"
@@ -305,10 +310,10 @@ async def handle_dolar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             mensaje = (
                 f"{E['dolar']} *DÓLAR EN CUBA*\n"
                 f"═══════════════════\n\n"
-                f"{E['blue']} *Blue:* `660` CUP\n"
-                f"{E['oficial']} *Oficial:* `24` CUP\n\n"
+                f"{E['blue']} *Blue:* `700.00` CUP\n"
+                f"{E['oficial']} *Oficial:* `24.00` CUP\n\n"
                 f"{E['fuente']} *Fuente:* elTOQUE.com (estimado)\n"
-                f"{E['alerta']} *Nota:* Datos estimados por fallo de API"
+                f"{E['alerta']} *Nota:* Datos estimados por fallo de fuente"
             )
 
         await update.message.reply_text(
@@ -550,15 +555,7 @@ async def unirse_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     run_health_server()
 
-    if not ELTOQUE_API_KEY:
-        logger.warning("⚠️ ELTOQUE_API_KEY no configurada")
-    else:
-        logger.info("✅ ELTOQUE_API_KEY configurada")
-
-    if not IPLOOP_API_KEY:
-        logger.warning("⚠️ IPLOOP_API_KEY no configurada")
-    else:
-        logger.info("✅ IPLOOP_API_KEY configurada")
+    logger.info("✅ Bot configurado para usar scraping de Telegram (@eltoquecom2)")
 
     app = Application.builder().token(TOKEN).build()
 
