@@ -2,13 +2,20 @@ import requests
 import logging
 import json
 import os
-import base64
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta
 import pytz
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
+
+# ========== IPLOOP SDK ==========
+try:
+    from iploop import IPLoop
+    IPLOOP_AVAILABLE = True
+except ImportError:
+    IPLOOP_AVAILABLE = False
+    logging.warning("⚠️ iploop-sdk no disponible")
 
 # ========== CONFIGURACIÓN ==========
 TOKEN = os.environ.get("BOT_TOKEN")
@@ -86,16 +93,29 @@ def get_main_keyboard():
 CACHE_DURATION = 60  # minutos (1 hora)
 dolar_cache = {"datos": None, "timestamp": None, "peticiones_hoy": 0, "ultima_peticion": None}
 
-# ========== PETICIÓN A ELTOQUE VÍA IPLOOP (AUTH MANUAL) ==========
+# ========== CLIENTE IPLOOP (SDK) ==========
+proxy_client = None
+if IPLOOP_AVAILABLE and IPLOOP_API_KEY:
+    try:
+        proxy_client = IPLoop(api_key=IPLOOP_API_KEY, country="CU")
+        logger.info("✅ IPLoop (ProxyClaw) inicializado con country='CU'")
+    except Exception as e:
+        logger.warning(f"⚠️ Error inicializando IPLoop: {e}")
+        proxy_client = None
+elif IPLOOP_AVAILABLE:
+    logger.warning("⚠️ IPLOOP_API_KEY no configurada")
+else:
+    logger.warning("⚠️ iploop-sdk no instalado")
+
+# ========== PETICIÓN A ELTOQUE VÍA IPLOOP (SDK) ==========
 def _get_dolar_eltoque():
-    """Obtiene las divisas usando IPLoop (ProxyClaw) con autenticación manual."""
+    """Obtiene las divisas usando el SDK oficial de IPLoop."""
     if not ELTOQUE_API_KEY:
         logger.warning("⚠️ ELTOQUE_API_KEY no configurada")
         return False, None
 
-    if not IPLOOP_API_KEY:
-        logger.warning("⚠️ IPLOOP_API_KEY no configurada")
-        # Fallback a petición directa
+    if not proxy_client:
+        logger.warning("⚠️ IPLoop no disponible, usando petición directa")
         try:
             headers = {"Authorization": f"Bearer {ELTOQUE_API_KEY}"}
             response = requests.get(ELTOQUE_URL, headers=headers, timeout=30)
@@ -109,46 +129,28 @@ def _get_dolar_eltoque():
         return False, None
 
     try:
-        headers = {
-            "Authorization": f"Bearer {ELTOQUE_API_KEY}",
-            "Accept": "application/json"
-        }
-
-        # --- Autenticación manual del proxy (soluciona el error 407) ---
-        proxy_user = "iploop"
-        proxy_pass = IPLOOP_API_KEY
-        credentials = f"{proxy_user}:{proxy_pass}"
-        encoded_credentials = base64.b64encode(credentials.encode('utf-8')).decode('utf-8')
-        headers["Proxy-Authorization"] = f"Basic {encoded_credentials}"
-
-        proxies = {
-            "http": "http://proxy.iploop.io:8880",
-            "https": "http://proxy.iploop.io:8880"
-        }
-
-        logger.info("🌐 Petición a elTOQUE vía IPLoop (auth manual)...")
-        response = requests.get(
-            ELTOQUE_URL,
-            headers=headers,
-            proxies=proxies,
-            timeout=60
-        )
-
-        logger.info(f"📡 Respuesta elTOQUE - Status: {response.status_code}")
-
-        if response.status_code == 200:
+        headers = {"Authorization": f"Bearer {ELTOQUE_API_KEY}"}
+        
+        # Usar el SDK de IPLoop, que maneja internamente la autenticación
+        logger.info("🌐 Petición a elTOQUE vía IPLoop (SDK)...")
+        response = proxy_client.fetch(ELTOQUE_URL, headers=headers)
+        
+        # El SDK puede devolver un objeto con .json() o el texto directamente
+        if hasattr(response, 'json'):
             data = response.json()
-            dolar_cache["peticiones_hoy"] += 1
-            dolar_cache["ultima_peticion"] = get_cuba_time()
-            logger.info(f"✅ elTOQUE OK vía IPLoop (petición #{dolar_cache['peticiones_hoy']})")
-            logger.info(f"📊 Datos: {str(data)[:300]}")
-            return True, data
+        elif hasattr(response, 'text'):
+            data = json.loads(response.text)
         else:
-            logger.error(f"❌ elTOQUE error {response.status_code}: {response.text[:300]}")
-            return False, None
+            data = json.loads(str(response))
+        
+        dolar_cache["peticiones_hoy"] += 1
+        dolar_cache["ultima_peticion"] = get_cuba_time()
+        logger.info(f"✅ elTOQUE OK vía IPLoop (petición #{dolar_cache['peticiones_hoy']})")
+        logger.info(f"📊 Datos: {str(data)[:300]}")
+        return True, data
 
     except Exception as e:
-        logger.warning(f"elTOQUE API error (IPLoop manual): {e}")
+        logger.warning(f"elTOQUE API error (IPLoop SDK): {e}")
         return False, None
 
 def get_divisas():
@@ -574,7 +576,9 @@ def main():
     else:
         logger.info("✅ ELTOQUE_API_KEY configurada")
 
-    if not IPLOOP_API_KEY:
+    if not IPLOOP_AVAILABLE:
+        logger.warning("⚠️ iploop-sdk no instalado")
+    elif not IPLOOP_API_KEY:
         logger.warning("⚠️ IPLOOP_API_KEY no configurada - no se usará proxy")
     else:
         logger.info("✅ IPLOOP_API_KEY configurada")
