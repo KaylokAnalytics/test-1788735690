@@ -86,9 +86,9 @@ def get_main_keyboard():
 CACHE_DURATION = 60  # minutos
 dolar_cache = {"datos": None, "timestamp": None, "peticiones_hoy": 0, "ultima_peticion": None}
 
-# ========== PETICIÓN A ELTOQUE VÍA IPLOOP (AUTH MANUAL v2) ==========
+# ========== PETICIÓN A ELTOQUE VÍA IPLOOP (AUTH MANUAL) ==========
 def _get_dolar_eltoque():
-    """Obtiene las divisas usando IPLoop (ProxyClaw) con autenticación manual v2."""
+    """Obtiene las divisas usando IPLoop (ProxyClaw) con autenticación manual."""
     if not ELTOQUE_API_KEY:
         logger.warning("⚠️ ELTOQUE_API_KEY no configurada")
         return False, None
