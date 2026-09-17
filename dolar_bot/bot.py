@@ -19,9 +19,6 @@ if not TOKEN:
 # Canal de Telegram de elTOQUE (nuevo canal)
 TELEGRAM_CHANNEL_URL = "https://t.me/s/eltoquecom2"
 
-# Tasa oficial (fija, del BCC)
-TASA_OFICIAL = 24
-
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO,
@@ -36,7 +33,7 @@ def get_cuba_time():
 
 # ========== EMOJIS ==========
 E = {
-    "dolar": "💵", "blue": "🇺🇸", "oficial": "🏛️", "euro": "🇪🇺", "mlc": "💳",
+    "dolar": "💵", "blue": "🇺🇸", "euro": "🇪🇺", "mlc": "💳",
     "analisis": "📊", "premium": "⭐", "alerta": "⚠️", "check": "✅", "info": "ℹ️",
     "calendario": "📅", "tendencia": "📈", "ayuda": "🆘", "usuario": "👤",
     "dinero": "💰", "noticia": "📰", "recomendacion": "📌", "menu": "🏠",
@@ -153,7 +150,6 @@ def _get_tasas_desde_telegram():
 
         data = {
             "blue": mas_reciente["blue"],
-            "oficial": TASA_OFICIAL,
             "eur": mas_reciente["eur"],
             "mlc": mas_reciente["mlc"],
             "fecha_eltoque": mas_reciente["fecha_str"],
@@ -197,8 +193,6 @@ def formatear_divisas(data):
 
         if data.get('blue'):
             mensaje += f"{E['blue']} *USD Blue:* `{data['blue']:,.2f}` CUP\n"
-        if data.get('oficial'):
-            mensaje += f"{E['oficial']} *USD Oficial:* `{data['oficial']:,.2f}` CUP\n"
         if data.get('eur'):
             mensaje += f"{E['euro']} *EUR:* `{data['eur']:,.2f}` CUP\n"
         if data.get('mlc'):
@@ -218,7 +212,6 @@ def formatear_divisas(data):
         mensaje += f"{E['calendario']} *Fecha:* {fecha}\n"
         mensaje += f"{E['hora']} *Hora:* {hora_actual}\n\n"
         mensaje += f"{E['blue']} *USD Blue:* `700.00` CUP\n"
-        mensaje += f"{E['oficial']} *USD Oficial:* `24.00` CUP\n"
         mensaje += f"{E['euro']} *EUR:* `797.50` CUP\n"
         mensaje += f"{E['mlc']} *MLC:* `455.39` CUP\n\n"
         mensaje += f"───────────────────\n"
@@ -273,7 +266,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"{E['analisis']} *DolarCubaAnalisisBot*\n"
         f"Tu asistente económico 🇨🇺\n\n"
         f"{E['usuario']} *Estado:* {'⭐ Premium' if is_premium else '🟢 Gratuito'}\n"
-        f"{E['divisas']} *Divisas:* USD (Blue/Oficial), EUR, MLC\n\n"
+        f"{E['divisas']} *Divisas:* USD Blue, EUR, MLC\n\n"
         f"Usa los botones del teclado 👇"
     )
 
@@ -291,15 +284,12 @@ async def handle_dolar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if divisas_data:
             blue = divisas_data.get('blue')
-            oficial = divisas_data.get('oficial')
             fecha = get_cuba_time().strftime('%d/%m/%Y %I:%M %p')
 
             mensaje = f"{E['dolar']} *DÓLAR EN CUBA*\n"
             mensaje += f"═══════════════════\n\n"
             if blue:
                 mensaje += f"{E['blue']} *Blue:* `{blue:,.2f}` CUP\n"
-            if oficial:
-                mensaje += f"{E['oficial']} *Oficial:* `{oficial:,.2f}` CUP\n"
             mensaje += f"\n{E['calendario']} *Fecha:* {fecha}\n"
             if divisas_data.get('fecha_eltoque'):
                 mensaje += f"{E['telegram']} *Publicado:* {divisas_data['fecha_eltoque']}\n"
@@ -311,8 +301,7 @@ async def handle_dolar(update: Update, context: ContextTypes.DEFAULT_TYPE):
             mensaje = (
                 f"{E['dolar']} *DÓLAR EN CUBA*\n"
                 f"═══════════════════\n\n"
-                f"{E['blue']} *Blue:* `700.00` CUP\n"
-                f"{E['oficial']} *Oficial:* `24.00` CUP\n\n"
+                f"{E['blue']} *Blue:* `700.00` CUP\n\n"
                 f"{E['fuente']} *Fuente:* elTOQUE.com (estimado)\n"
                 f"{E['alerta']} *Nota:* Datos estimados por fallo de fuente"
             )
