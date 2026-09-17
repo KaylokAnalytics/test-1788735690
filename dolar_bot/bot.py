@@ -2,7 +2,6 @@ import requests
 import logging
 import json
 import os
-import re
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta
@@ -18,14 +17,6 @@ try:
 except ImportError:
     CLOUDSCRAPER_AVAILABLE = False
     logging.warning("⚠️ cloudscraper no disponible")
-
-# ========== IPLOOP SDK ==========
-try:
-    from iploop import IPLoop
-    IPLOOP_AVAILABLE = True
-except ImportError:
-    IPLOOP_AVAILABLE = False
-    logging.warning("⚠️ iploop-sdk no disponible")
 
 # ========== CONFIGURACIÓN ==========
 TOKEN = os.environ.get("BOT_TOKEN")
@@ -103,26 +94,34 @@ def get_main_keyboard():
 CACHE_DURATION = 60  # minutos (1 hora)
 dolar_cache = {"datos": None, "timestamp": None, "peticiones_hoy": 0, "ultima_peticion": None}
 
-# ========== CLIENTE IPLOOP ==========
-proxy_client = None
-if IPLOOP_AVAILABLE and IPLOOP_API_KEY:
-    try:
-        # Creamos el cliente y una sesión sticky para mantener la IP
-        proxy_client = IPLoop(api_key=IPLOOP_API_KEY, country="CU")
-        # Usar sesión sticky para que todas las peticiones salgan por la misma IP cubana
-        proxy_session = proxy_client.session()
-        logger.info("✅ IPLoop (ProxyClaw) inicializado con country='CU'")
-    except Exception as e:
-        logger.warning(f"⚠️ Error inicializando IPLoop: {e}")
-        proxy_session = None
-elif IPLOOP_AVAILABLE:
-    logger.warning("⚠️ IPLOOP_API_KEY no configurada")
+# ========== CLIENTE HTTP (fallback) ==========
+if CLOUDSCRAPER_AVAILABLE:
+    scraper = cloudscraper.create_scraper(
+        browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
+    )
+else:
+    scraper = None
 
-# ========== PETICIÓN A ELTOQUE VÍA IPLOOP ==========
+# ========== PETICIÓN A ELTOQUE VÍA IPLOOP (MÉTODO MANUAL) ==========
 def _get_dolar_eltoque():
-    """Obtiene las divisas usando IPLoop (ProxyClaw)."""
+    """Obtiene las divisas usando IPLoop (ProxyClaw) de forma manual."""
     if not ELTOQUE_API_KEY:
         logger.warning("⚠️ ELTOQUE_API_KEY no configurada")
+        return False, None
+    
+    if not IPLOOP_API_KEY:
+        logger.warning("⚠️ IPLOOP_API_KEY no configurada")
+        # Fallback a petición directa si no hay proxy
+        try:
+            headers = {"Authorization": f"Bearer {ELTOQUE_API_KEY}"}
+            response = requests.get(ELTOQUE_URL, headers=headers, timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                dolar_cache["peticiones_hoy"] += 1
+                logger.info(f"✅ elTOQUE OK (directo, petición #{dolar_cache['peticiones_hoy']})")
+                return True, data
+        except Exception as e:
+            logger.warning(f"elTOQUE API error (directo): {e}")
         return False, None
 
     try:
@@ -130,51 +129,38 @@ def _get_dolar_eltoque():
             "Authorization": f"Bearer {ELTOQUE_API_KEY}",
             "Accept": "application/json"
         }
-
-        if proxy_client and proxy_session:
-            logger.info("🌐 Petición a elTOQUE vía IPLoop (ProxyClaw) desde Cuba...")
-            # Usamos la sesión sticky para mantener la IP cubana
-            response = proxy_session.fetch(ELTOQUE_URL, headers=headers)
-
-            # El SDK puede devolver diferentes formatos según la versión
-            if hasattr(response, 'json'):
-                data = response.json()
-            elif hasattr(response, 'text'):
-                data = json.loads(response.text)
-            else:
-                # Si devuelve el texto plano directamente
-                data = json.loads(str(response))
-
+        
+        # --- Construcción manual del proxy ---
+        # Formato: http://usuario:contraseña@host:puerto
+        proxy_user = "iploop"
+        proxy_pass = IPLOOP_API_KEY
+        
+        proxy_url = f"http://{proxy_user}:{proxy_pass}@proxy.iploop.io:8880"
+        proxies = {"http": proxy_url, "https": proxy_url}
+        
+        logger.info("🌐 Petición a elTOQUE vía IPLoop (manual)...")
+        response = requests.get(
+            ELTOQUE_URL,
+            headers=headers,
+            proxies=proxies,
+            timeout=60
+        )
+        
+        logger.info(f"📡 Respuesta elTOQUE - Status: {response.status_code}")
+        
+        if response.status_code == 200:
+            data = response.json()
             dolar_cache["peticiones_hoy"] += 1
             dolar_cache["ultima_peticion"] = get_cuba_time()
             logger.info(f"✅ elTOQUE OK vía IPLoop (petición #{dolar_cache['peticiones_hoy']})")
             logger.info(f"📊 Datos: {str(data)[:300]}")
             return True, data
         else:
-            # Fallback: petición directa (probablemente bloqueada)
-            logger.info("🌐 Petición directa a elTOQUE (sin proxy)...")
-            if CLOUDSCRAPER_AVAILABLE and scraper:
-                response = scraper.get(ELTOQUE_URL, headers=headers, timeout=30)
-            else:
-                response = requests.get(ELTOQUE_URL, headers=headers, timeout=30)
-
-            logger.info(f"📡 Respuesta elTOQUE - Status: {response.status_code}")
-
-            if response.status_code == 200:
-                data = response.json()
-                dolar_cache["peticiones_hoy"] += 1
-                dolar_cache["ultima_peticion"] = get_cuba_time()
-                logger.info(f"✅ elTOQUE OK (petición #{dolar_cache['peticiones_hoy']})")
-                return True, data
-            else:
-                logger.error(f"❌ elTOQUE error {response.status_code}: {response.text[:300]}")
-                return False, None
-
-    except CloudflareChallengeError as e:
-        logger.error(f"❌ Cloudflare bloqueó la petición: {e}")
-        return False, None
+            logger.error(f"❌ elTOQUE error {response.status_code}: {response.text[:300]}")
+            return False, None
+            
     except Exception as e:
-        logger.warning(f"elTOQUE API error (IPLoop): {e}")
+        logger.warning(f"elTOQUE API error (IPLoop manual): {e}")
         return False, None
 
 def get_divisas():
@@ -600,12 +586,10 @@ def main():
     else:
         logger.info("✅ ELTOQUE_API_KEY configurada")
 
-    if not IPLOOP_AVAILABLE:
-        logger.warning("⚠️ iploop-sdk no instalado - no se usará proxy")
-    elif not IPLOOP_API_KEY:
+    if not IPLOOP_API_KEY:
         logger.warning("⚠️ IPLOOP_API_KEY no configurada - no se usará proxy")
     else:
-        logger.info("✅ IPLoop configurado para usar IPs de Cuba")
+        logger.info("✅ IPLOOP_API_KEY configurada")
 
     app = Application.builder().token(TOKEN).build()
 
