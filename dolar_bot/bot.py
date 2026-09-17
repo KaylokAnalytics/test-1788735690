@@ -19,6 +19,14 @@ except ImportError:
     CLOUDSCRAPER_AVAILABLE = False
     logging.warning("⚠️ cloudscraper no disponible")
 
+# ========== IPLOOP SDK ==========
+try:
+    from iploop import IPLoop
+    IPLOOP_AVAILABLE = True
+except ImportError:
+    IPLOOP_AVAILABLE = False
+    logging.warning("⚠️ iploop-sdk no disponible")
+
 # ========== CONFIGURACIÓN ==========
 TOKEN = os.environ.get("BOT_TOKEN")
 if not TOKEN:
@@ -28,9 +36,8 @@ if not TOKEN:
 ELTOQUE_API_KEY = os.environ.get("ELTOQUE_API_KEY")
 ELTOQUE_URL = "https://api.eltoque.com/v1/dolar"
 
-# ScrapingAnt (para resolver Cloudflare)
-SCRAPINGANT_KEY = os.environ.get("SCRAPINGANT_KEY")
-SCRAPINGANT_URL = "https://api.scrapingant.com/v2/general"
+# IPLoop (ProxyClaw)
+IPLOOP_API_KEY = os.environ.get("IPLOOP_API_KEY")
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -46,32 +53,11 @@ def get_cuba_time():
 
 # ========== EMOJIS TEMÁTICOS ==========
 E = {
-    "dolar": "💵",
-    "blue": "🇺🇸",
-    "oficial": "🏛️",
-    "euro": "🇪🇺",
-    "mlc": "💳",
-    "libra": "🇬🇧",
-    "peso_mx": "🇲🇽",
-    "analisis": "📊",
-    "premium": "⭐",
-    "alerta": "⚠️",
-    "check": "✅",
-    "info": "ℹ️",
-    "calendario": "📅",
-    "tendencia": "📈",
-    "ayuda": "🆘",
-    "volver": "🔙",
-    "usuario": "👤",
-    "dinero": "💰",
-    "grafico": "📈",
-    "noticia": "📰",
-    "recomendacion": "📌",
-    "menu": "🏠",
-    "fuente": "📡",
-    "divisas": "💱",
-    "hora": "🕐",
-    "compartir": "📤",
+    "dolar": "💵", "blue": "🇺🇸", "oficial": "🏛️", "euro": "🇪🇺", "mlc": "💳",
+    "analisis": "📊", "premium": "⭐", "alerta": "⚠️", "check": "✅", "info": "ℹ️",
+    "calendario": "📅", "tendencia": "📈", "ayuda": "🆘", "volver": "🔙", "usuario": "👤",
+    "dinero": "💰", "grafico": "📈", "noticia": "📰", "recomendacion": "📌", "menu": "🏠",
+    "fuente": "📡", "divisas": "💱", "hora": "🕐", "compartir": "📤",
 }
 
 # ========== SERVIDOR WEB PARA HEALTH CHECK ==========
@@ -80,7 +66,6 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"Bot is running!")
-
     def log_message(self, format, *args):
         return
 
@@ -93,7 +78,6 @@ def run_health_server():
 
 # ========== USUARIOS PREMIUM ==========
 PREMIUM_USERS_FILE = "premium_users.json"
-
 def load_premium_users():
     try:
         with open(PREMIUM_USERS_FILE, "r") as f:
@@ -117,93 +101,65 @@ def get_main_keyboard():
 
 # ========== SISTEMA DE CACHÉ ==========
 CACHE_DURATION = 60  # minutos (1 hora)
+dolar_cache = {"datos": None, "timestamp": None, "peticiones_hoy": 0, "ultima_peticion": None}
 
-dolar_cache = {
-    "datos": None,
-    "timestamp": None,
-    "peticiones_hoy": 0,
-    "ultima_peticion": None
-}
+# ========== CLIENTE IPLOOP ==========
+proxy_client = None
+if IPLOOP_AVAILABLE and IPLOOP_API_KEY:
+    try:
+        # Creamos el cliente y una sesión sticky para mantener la IP
+        proxy_client = IPLoop(api_key=IPLOOP_API_KEY, country="CU")
+        # Usar sesión sticky para que todas las peticiones salgan por la misma IP cubana
+        proxy_session = proxy_client.session()
+        logger.info("✅ IPLoop (ProxyClaw) inicializado con country='CU'")
+    except Exception as e:
+        logger.warning(f"⚠️ Error inicializando IPLoop: {e}")
+        proxy_session = None
+elif IPLOOP_AVAILABLE:
+    logger.warning("⚠️ IPLOOP_API_KEY no configurada")
 
-# ========== CLIENTE HTTP (fallback) ==========
-if CLOUDSCRAPER_AVAILABLE:
-    scraper = cloudscraper.create_scraper(
-        browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
-    )
-else:
-    scraper = None
-
-# ========== PETICIÓN A ELTOQUE VÍA SCRAPINGANT ==========
+# ========== PETICIÓN A ELTOQUE VÍA IPLOOP ==========
 def _get_dolar_eltoque():
-    """Obtiene todas las divisas desde la API de elTOQUE usando ScrapingAnt."""
+    """Obtiene las divisas usando IPLoop (ProxyClaw)."""
     if not ELTOQUE_API_KEY:
         logger.warning("⚠️ ELTOQUE_API_KEY no configurada")
         return False, None
-    
+
     try:
         headers = {
             "Authorization": f"Bearer {ELTOQUE_API_KEY}",
             "Accept": "application/json"
         }
-        
-        if SCRAPINGANT_KEY:
-            # ScrapingAnt: proxy residencial + navegador real
-            params = {
-                "x-api-key": SCRAPINGANT_KEY,
-                "url": ELTOQUE_URL,
-                "browser": "true",
-                "proxy_type": "residential",
-                "proxy_country": "US",
-                "return_page_source": "true",
-            }
-            logger.info("🌐 Petición a elTOQUE vía ScrapingAnt (residential proxy)...")
-            response = requests.get(
-                SCRAPINGANT_URL,
-                params=params,
-                headers=headers,
-                timeout=90
-            )
-            
-            logger.info(f"📡 Respuesta ScrapingAnt - Status: {response.status_code}")
-            
-            if response.status_code == 200:
-                # ScrapingAnt devuelve JSON con "content"
-                try:
-                    result = response.json()
-                    content = result.get("content", "")
-                    logger.info(f"📄 Contenido (primeros 300 chars): {content[:300]}")
-                    
-                    # Parsear el JSON de elTOQUE que está dentro de "content"
-                    if content:
-                        data = json.loads(content)
-                        logger.info("✅ JSON de elTOQUE parseado")
-                    else:
-                        data = result
-                        logger.info("✅ Usando respuesta directa")
-                    
-                    dolar_cache["peticiones_hoy"] += 1
-                    dolar_cache["ultima_peticion"] = get_cuba_time()
-                    logger.info(f"✅ elTOQUE OK (petición #{dolar_cache['peticiones_hoy']})")
-                    logger.info(f"📊 Datos: {str(data)[:300]}")
-                    return True, data
-                    
-                except Exception as parse_error:
-                    logger.error(f"❌ Error parseando JSON: {parse_error}")
-                    logger.info(f"📄 Respuesta cruda: {response.text[:500]}")
-                    return False, None
+
+        if proxy_client and proxy_session:
+            logger.info("🌐 Petición a elTOQUE vía IPLoop (ProxyClaw) desde Cuba...")
+            # Usamos la sesión sticky para mantener la IP cubana
+            response = proxy_session.fetch(ELTOQUE_URL, headers=headers)
+
+            # El SDK puede devolver diferentes formatos según la versión
+            if hasattr(response, 'json'):
+                data = response.json()
+            elif hasattr(response, 'text'):
+                data = json.loads(response.text)
             else:
-                logger.error(f"❌ ScrapingAnt error {response.status_code}: {response.text[:300]}")
-                return False, None
+                # Si devuelve el texto plano directamente
+                data = json.loads(str(response))
+
+            dolar_cache["peticiones_hoy"] += 1
+            dolar_cache["ultima_peticion"] = get_cuba_time()
+            logger.info(f"✅ elTOQUE OK vía IPLoop (petición #{dolar_cache['peticiones_hoy']})")
+            logger.info(f"📊 Datos: {str(data)[:300]}")
+            return True, data
         else:
-            # Fallback: petición directa
-            logger.info("🌐 Petición directa a elTOQUE...")
+            # Fallback: petición directa (probablemente bloqueada)
+            logger.info("🌐 Petición directa a elTOQUE (sin proxy)...")
             if CLOUDSCRAPER_AVAILABLE and scraper:
                 response = scraper.get(ELTOQUE_URL, headers=headers, timeout=30)
             else:
                 response = requests.get(ELTOQUE_URL, headers=headers, timeout=30)
-            
+
             logger.info(f"📡 Respuesta elTOQUE - Status: {response.status_code}")
-            
+
             if response.status_code == 200:
                 data = response.json()
                 dolar_cache["peticiones_hoy"] += 1
@@ -213,51 +169,51 @@ def _get_dolar_eltoque():
             else:
                 logger.error(f"❌ elTOQUE error {response.status_code}: {response.text[:300]}")
                 return False, None
-            
+
     except CloudflareChallengeError as e:
         logger.error(f"❌ Cloudflare bloqueó la petición: {e}")
         return False, None
     except Exception as e:
-        logger.warning(f"elTOQUE API error: {e}")
+        logger.warning(f"elTOQUE API error (IPLoop): {e}")
         return False, None
 
 def get_divisas():
     """Obtiene todas las divisas con caché y límite de peticiones."""
     global dolar_cache
-    
+
     if dolar_cache["timestamp"] and (get_cuba_time() - dolar_cache["timestamp"]) < timedelta(minutes=CACHE_DURATION):
         logger.info("📦 Usando caché de divisas")
         return dolar_cache["datos"]
-    
+
     if dolar_cache["peticiones_hoy"] >= 300:
         logger.warning("⚠️ Límite de peticiones diarias alcanzado (300)")
         if dolar_cache["datos"]:
             return dolar_cache["datos"]
         return None
-    
+
     success, data = _get_dolar_eltoque()
-    
+
     if success and data:
         dolar_cache["datos"] = data
         dolar_cache["timestamp"] = get_cuba_time()
         return data
-    
+
     return None
 
 def formatear_divisas(data):
     """Formatea los datos de divisas para mostrarlos."""
     fecha = get_cuba_time().strftime('%d/%m/%Y %I:%M %p')
     hora_actual = get_cuba_time().strftime('%I:%M %p')
-    
+
     if data:
         mensaje = f"{E['divisas']} *DIVISAS EN CUBA*\n"
         mensaje += f"═══════════════════\n\n"
         mensaje += f"{E['calendario']} *Fecha:* {fecha}\n"
         mensaje += f"{E['hora']} *Hora:* {hora_actual}\n\n"
-        
+
         if isinstance(data, dict):
             datos = data.get('data', data)
-            
+
             if datos.get('blue'):
                 mensaje += f"{E['blue']} *USD Blue:* `{datos['blue']:,.0f}` CUP\n"
             if datos.get('oficial'):
@@ -271,13 +227,13 @@ def formatear_divisas(data):
                 mensaje += f"{E['libra']} *GBP:* `{datos['gbp']:,.0f}` CUP\n"
             if datos.get('mxn'):
                 mensaje += f"{E['peso_mx']} *MXN:* `{datos['mxn']:,.0f}` CUP\n"
-        
+
         mensaje += f"\n───────────────────\n"
         mensaje += f"{E['fuente']} *Fuente:* elTOQUE.com\n"
         mensaje += f"{E['info']} *Datos actualizados:* {fecha}\n"
         mensaje += f"───────────────────\n"
         mensaje += f"_{'Datos del mercado cambiario cubano'}_"
-        
+
         return mensaje
     else:
         mensaje = f"{E['divisas']} *DIVISAS EN CUBA*\n"
@@ -293,13 +249,13 @@ def formatear_divisas(data):
         mensaje += f"{E['alerta']} *Nota:* Datos estimados - API fuera de línea\n"
         mensaje += f"───────────────────\n"
         mensaje += f"_{'Datos de respaldo basados en tendencias del mercado'}_"
-        
+
         return mensaje
 
 # ========== MANEJADOR DE ERRORES ==========
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"❌ Error: {context.error}")
-    
+
     mensaje = (
         f"{E['alerta']} *UPS! ALGO SALIÓ MAL*\n"
         f"═══════════════════\n\n"
@@ -314,7 +270,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"───────────────────\n"
         f"_¡Gracias por tu comprensión!_ 🙏"
     )
-    
+
     if update and update.effective_chat:
         await update.effective_chat.send_message(
             mensaje,
@@ -325,11 +281,11 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ========== COMANDOS ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.chat.send_action(action="typing")
-    
+
     user = update.effective_user
     nombre = user.first_name or user.username or "Usuario"
     user_id = str(user.id)
-    
+
     hora = get_cuba_time().hour
     if 6 <= hora < 12:
         saludo = "🌅 Buenos días"
@@ -337,7 +293,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         saludo = "🌤️ Buenas tardes"
     else:
         saludo = "🌙 Buenas noches"
-    
+
     premium_data = load_premium_users()
     is_premium = user_id in premium_data["users"]
 
@@ -359,16 +315,16 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_dolar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.chat.send_action(action="typing")
-    
+
     try:
         divisas_data = get_divisas()
-        
+
         if divisas_data:
             datos = divisas_data.get('data', divisas_data) if isinstance(divisas_data, dict) else {}
             blue = datos.get('blue')
             oficial = datos.get('oficial')
             fecha = get_cuba_time().strftime('%d/%m/%Y %I:%M %p')
-            
+
             mensaje = f"{E['dolar']} *DÓLAR EN CUBA*\n"
             mensaje += f"═══════════════════\n\n"
             if blue:
@@ -389,7 +345,7 @@ async def handle_dolar(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"{E['fuente']} *Fuente:* elTOQUE.com (estimado)\n"
                 f"{E['alerta']} *Nota:* Datos estimados por fallo de API"
             )
-        
+
         await update.message.reply_text(
             mensaje,
             reply_markup=get_main_keyboard(),
@@ -411,11 +367,11 @@ async def handle_dolar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_divisas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.chat.send_action(action="typing")
-    
+
     try:
         divisas_data = get_divisas()
         mensaje = formatear_divisas(divisas_data)
-        
+
         await update.message.reply_text(
             mensaje,
             reply_markup=get_main_keyboard(),
@@ -431,7 +387,7 @@ async def handle_divisas(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_analisis(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.chat.send_action(action="typing")
-    
+
     fecha = get_cuba_time().strftime('%d/%m/%Y %I:%M %p')
     mensaje = (
         f"{E['analisis']} *ANÁLISIS ECONÓMICO*\n"
@@ -457,7 +413,7 @@ async def handle_analisis(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.chat.send_action(action="typing")
-    
+
     user = update.effective_user
     nombre = user.first_name or user.username or "Usuario"
     user_id = str(user.id)
@@ -495,7 +451,7 @@ async def handle_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"¿Te unes a la lista de espera?\n"
             f"Usa el comando /unirse"
         )
-    
+
     await update.message.reply_text(
         mensaje,
         reply_markup=get_main_keyboard(),
@@ -504,10 +460,10 @@ async def handle_premium(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.chat.send_action(action="typing")
-    
+
     user = update.effective_user
     nombre = user.first_name or user.username or "Usuario"
-    
+
     mensaje = (
         f"{E['ayuda']} *AYUDA PARA {nombre.upper()}*\n"
         f"═══════════════════\n\n"
@@ -537,12 +493,12 @@ async def handle_ayuda(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_compartir(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.chat.send_action(action="typing")
-    
+
     keyboard = [
         [InlineKeyboardButton("📤 Compartir en Telegram", url="https://t.me/share/url?url=https://t.me/DolarCubaAnalisisBot")],
         [InlineKeyboardButton("📋 Copiar enlace", callback_data="copiar_enlace")],
     ]
-    
+
     mensaje = (
         f"{E['compartir']} *COMPARTE EL BOT*\n"
         f"═══════════════════\n\n"
@@ -552,7 +508,7 @@ async def handle_compartir(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"───────────────────\n"
         f"_{'¡Gracias por ayudar a crecer la comunidad!'}_ 🙏"
     )
-    
+
     await update.message.reply_text(
         mensaje,
         reply_markup=InlineKeyboardMarkup(keyboard),
@@ -566,7 +522,7 @@ async def handle_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    
+
     if query.data == "copiar_enlace":
         mensaje = (
             f"📋 *COPIA EL ENLACE*\n"
@@ -597,7 +553,7 @@ async def compartir_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def unirse_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.chat.send_action(action="typing")
-    
+
     user = update.effective_user
     nombre = user.first_name or user.username or "Usuario"
     user_id = str(user.id)
@@ -628,7 +584,7 @@ async def unirse_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Posición: *{len(premium_data['waitlist'])}*\n\n"
             f"{E['alerta']} *Te avisaremos cuando haya cupo*"
         )
-    
+
     await update.message.reply_text(
         mensaje,
         reply_markup=get_main_keyboard(),
@@ -638,17 +594,19 @@ async def unirse_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ========== MAIN ==========
 def main():
     run_health_server()
-    
+
     if not ELTOQUE_API_KEY:
         logger.warning("⚠️ ELTOQUE_API_KEY no configurada - usando datos estimados")
     else:
         logger.info("✅ ELTOQUE_API_KEY configurada")
-    
-    if not SCRAPINGANT_KEY:
-        logger.warning("⚠️ SCRAPINGANT_KEY no configurada - peticiones directas (pueden fallar)")
+
+    if not IPLOOP_AVAILABLE:
+        logger.warning("⚠️ iploop-sdk no instalado - no se usará proxy")
+    elif not IPLOOP_API_KEY:
+        logger.warning("⚠️ IPLOOP_API_KEY no configurada - no se usará proxy")
     else:
-        logger.info("✅ SCRAPINGANT_KEY configurada")
-    
+        logger.info("✅ IPLoop configurado para usar IPs de Cuba")
+
     app = Application.builder().token(TOKEN).build()
 
     # Comandos
